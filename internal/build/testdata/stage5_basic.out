@@ -1,0 +1,15 @@
+rect 6
+circle 3
+2 map[a:11 c:3]
+a 11
+c 3
+14 <nil>
+not found: zz
+key zz
+2 3
+[2 4 6] [101 102]
+int 5 string s shape rect nil other
+deferred 1
+40
+boom false true
+true

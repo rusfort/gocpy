@@ -1,0 +1,47 @@
+package feed
+
+type Number interface {
+    ~int | ~int64 | ~float64
+}
+
+type Money struct {
+    cents int64
+}
+
+@overload
+func (a Money) +(b Money) Money { return Money{a.cents + b.cents} }
+
+@overload
+func (a Money) *(k int64) Money { return Money{a.cents * k} }
+
+@overload
+func (a Money) ==(b Money) bool { return a.cents == b.cents }
+
+@overload
+func Max(a, b int) int {
+    if a > b { return a }
+    return b
+}
+
+@overload
+func Max(a, b float64) float64 {
+    if a > b { return a }
+    return b
+}
+
+func Sum[T Number](xs []T) T {
+    var s T
+    for x in xs { s += x }
+    return s
+}
+
+func worker(input chan[int], done chan[bool]) {
+    for {
+        select {
+        case v := <-input:
+            if v < 0 { done <- true; return }
+        case <-time.After(time.Second):
+            return
+        }
+    }
+}

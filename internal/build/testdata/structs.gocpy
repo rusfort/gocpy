@@ -1,0 +1,52 @@
+package main
+
+import "std/fmt"
+
+type Point struct {
+    X, Y int
+}
+
+type Rect struct {
+    Min, Max Point
+    Name     string
+}
+
+func (p Point) Add(q Point) Point { return Point{p.X + q.X, p.Y + q.Y} }
+
+func (p *Point) Scale(k int) {
+    p.X *= k
+    p.Y *= k
+}
+
+func (r Rect) Area() int {
+    return (r.Max.X - r.Min.X) * (r.Max.Y - r.Min.Y)
+}
+
+type Celsius float64
+
+func (c Celsius) String() string { return f"{float64(c):.1f}°C" }
+
+func newPoint(x, y int) *Point {
+    p := Point{x, y}
+    return &p
+}
+
+func main() {
+    p := Point{1, 2}
+    q := Point{X: 10, Y: 20}
+    fmt.Println(p.Add(q))
+    p.Scale(3)
+    fmt.Println(p)
+    r := Rect{Point{0, 0}, Point{4, 5}, "box"}
+    fmt.Println(r, r.Area())
+    pp := newPoint(7, 8)
+    pp.Scale(2)
+    fmt.Println(pp.X, pp.Y, *pp)
+    hp := &Point{1, 1}
+    hp.Y = 99
+    fmt.Println(hp.Add(Point{1, 1}))
+    var t Celsius = 21.55
+    fmt.Println(t)
+    var np *Point
+    fmt.Println(np == nil, pp != nil)
+}

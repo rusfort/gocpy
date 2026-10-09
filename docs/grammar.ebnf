@@ -1,0 +1,111 @@
+(* Gocpy grammar, draft 0.1 — EBNF (ISO-ish).
+   Lexical: newline acts as ';' after IDENT, literals, break, continue,
+   fallthrough, return, ++, --, ')', ']', '}', '?'.                       *)
+
+SourceFile    = PackageClause ";" { ImportDecl ";" } { TopLevelDecl ";" } .
+PackageClause = "package" identifier .
+ImportDecl    = "import" ( ImportSpec | "(" { ImportSpec ";" } ")" ) .
+ImportSpec    = [ "." | identifier ] string_lit .
+
+(* ---------- annotations ---------- *)
+Annotations   = { Annotation [ ";" ] } .
+Annotation    = "@" identifier [ "(" [ ExprList [ "," ] ] ")" ] .
+Intrinsic     = "@" identifier "(" [ ExprList ] ")" .        (* expression *)
+
+(* ---------- declarations ---------- *)
+TopLevelDecl  = Annotations ( FuncDecl | TypeDecl | VarDecl | ConstDecl ) .
+TypeDecl      = "type" ( TypeSpec | "(" { TypeSpec ";" } ")" ) .
+TypeSpec      = identifier [ TypeParams ] [ "=" ] Type .
+VarDecl       = "var"   ( VarSpec | "(" { VarSpec ";" } ")" ) .
+ConstDecl     = "const" ( VarSpec | "(" { VarSpec ";" } ")" ) .
+VarSpec       = IdentList ( Type [ "=" ExprList ] | "=" ExprList ) .
+
+FuncDecl      = "func" [ Receiver ] FuncName [ TypeParams ] Signature [ Block ] .
+Receiver      = Parameters .
+FuncName      = identifier | OperatorName .                  (* operators: methods only, @overload *)
+OperatorName  = "+" | "-" | "*" | "/" | "%" | "==" | "<" | "<<" | ">>"
+              | "&" | "|" | "^" | "!" | "[" "]" .
+TypeParams    = "[" TypeParamDecl { "," TypeParamDecl } "]" .
+TypeParamDecl = IdentList Constraint .
+Constraint    = ConstraintTerm { "|" ConstraintTerm } .
+ConstraintTerm= [ "~" ] Type .
+
+Signature     = Parameters [ Result ] .
+Result        = Parameters | Type .
+Parameters    = "(" [ ParamDecl { "," ParamDecl } [ "," ] ] ")" .
+ParamDecl     = [ IdentList ] [ "..." ] Type .
+
+(* ---------- types ---------- *)
+Type          = TypeName [ TypeArgs ] | "(" Type ")" | TypeLit .
+TypeName      = identifier [ "." identifier ] .
+TypeArgs      = "[" Type { "," Type } "]" .
+TypeLit       = "*" Type
+              | "[" [ Expression | "..." ] "]" Type             (* []T, [N]T *)
+              | "map" "[" Type "]" Type
+              | "chan" ( Type | "[" Type "]" )                  (* chan T, chan[T] *)
+              | Annotations "func" Signature                    (* @throws func(...) *)
+              | "struct" "{" { FieldDecl ";" } "}"
+              | "interface" "{" { InterfaceElem ";" } "}" .
+FieldDecl     = Annotations ( IdentList Type | [ "*" ] TypeName ) [ string_lit ] .
+InterfaceElem = Annotations ( identifier Signature | Constraint ) .
+
+(* ---------- statements ---------- *)
+Block         = "{" { Statement ";" } "}" .
+Statement     = Declaration | SimpleStmt | Block
+              | IfStmt | ForStmt | ForInStmt | SwitchStmt | SelectStmt
+              | TryStmt | ThrowStmt | UnsafeStmt
+              | "go" CallExpr | "defer" CallExpr
+              | "return" [ ExprList ]
+              | "break" [ identifier ] | "continue" [ identifier ] | "fallthrough" .
+SimpleStmt    = Expression
+              | Expression "<-" Expression                      (* send *)
+              | Expression ( "++" | "--" )
+              | ExprList ( "=" | ":=" | assign_op ) ExprList .
+
+IfStmt        = "if" [ SimpleStmt ";" ] Expression Block [ "else" ( IfStmt | Block ) ] .
+ForStmt       = "for" [ Expression | [ SimpleStmt ] ";" [ Expression ] ";" [ SimpleStmt ] ] Block .
+ForInStmt     = "for" identifier [ "," identifier ] "in" Expression Block .
+SwitchStmt    = "switch" [ SimpleStmt ";" ] [ SimpleStmt ] "{" { CaseClause } "}" .
+CaseClause    = ( "case" ExprList | "default" ) ":" { Statement ";" } .
+SelectStmt    = "select" "{" { CommClause } "}" .
+CommClause    = ( "case" SimpleStmt | "default" ) ":" { Statement ";" } .
+
+TryStmt       = "try" Block { CatchClause } [ "finally" Block ] .   (* ≥1 catch or finally *)
+CatchClause   = "catch" [ identifier [ ":" Type ] ] Block .         (* untyped = catch-all, must be last *)
+ThrowStmt     = "throw" Expression .
+UnsafeStmt    = "unsafe" Block .            (* malloc/free, pointer arithmetic, casts *)
+
+(* ---------- expressions ---------- *)
+ExprList      = Expression { "," Expression } .
+Expression    = UnaryExpr | Expression binary_op Expression .
+UnaryExpr     = PrimaryExpr | unary_op UnaryExpr .
+PrimaryExpr   = Operand
+              | PrimaryExpr "." identifier
+              | PrimaryExpr "." "(" ( Type | "type" ) ")"
+              | PrimaryExpr "[" Expression { "," Type } "]"     (* index / generic instantiation *)
+              | PrimaryExpr "[" [ Expression ] ":" [ Expression ] [ ":" Expression ] "]"
+              | PrimaryExpr "(" [ ExprList [ "..." ] [ "," ] ] ")"
+              | PrimaryExpr "?"                                  (* error propagation *)
+              | LiteralType LiteralValue .
+Operand       = identifier | int_lit | float_lit | char_lit | string_lit | fstring_lit
+              | "(" Expression ")" | FuncLit | Comprehension | Intrinsic | TypeLit .
+FuncLit       = "func" Signature Block .
+Comprehension = "[" Expression "for" identifier [ "," identifier ] "in" Expression [ "if" Expression ] "]" .
+LiteralValue  = "{" [ Element { "," Element } [ "," ] ] "}" .
+Element       = [ ( Expression | LiteralValue ) ":" ] ( Expression | LiteralValue ) .
+
+binary_op     = "||" | "&&" | "==" | "!=" | "<" | "<=" | ">" | ">="
+              | "+" | "-" | "|" | "^" | "*" | "/" | "%" | "<<" | ">>" | "&" | "&^" .
+unary_op      = "+" | "-" | "!" | "^" | "*" | "&" | "<-" .
+assign_op     = "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "&^=" .
+
+(* Precedence: 5: * / % << >> & &^   4: + - | ^   3: == != < <= > >=   2: &&   1: || *)
+
+(* f-strings: f"text {expr} {expr:spec} {{literal braces}}" *)
+
+(* Keywords (31):
+   break case chan const continue default defer else fallthrough for func go
+   if import interface map package return select struct switch type var
+   in try catch finally throw unsafe
+   Predeclared (not keywords): any nil true false len cap make new append
+   sizeof malloc free thread error, numeric types as in Go.               *)

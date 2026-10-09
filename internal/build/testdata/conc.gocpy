@@ -1,0 +1,185 @@
+package main
+
+import (
+    "std/fmt"
+    "std/sync"
+    "std/time"
+)
+
+type Job struct {
+    ID int
+    N  int
+}
+
+func worker(jobs chan Job, results chan int, wg *sync.WaitGroup) {
+    for j in jobs {
+        results <- j.N * j.N
+    }
+    wg.Done()
+}
+
+func pool() {
+    jobs := make(chan Job, 100)
+    results := make(chan int, 100)
+    var wg sync.WaitGroup
+    for w in 4 {
+        wg.Add(1)
+        go worker(jobs, results, &wg)
+        _ = w
+    }
+    for i in 50 {
+        jobs <- Job{i, i + 1}
+    }
+    close(jobs)
+    wg.Wait()
+    close(results)
+    total := 0
+    count := 0
+    for r in results {
+        total += r
+        count++
+    }
+    fmt.Println("pool:", count, total)
+}
+
+func pinger(input chan int, out chan int) {
+    for {
+        v, ok := <-input
+        if !ok {
+            close(out)
+            return
+        }
+        out <- v + 1
+    }
+}
+
+func pingPong() {
+    a := make(chan int)
+    b := make(chan int)
+    go pinger(a, b)
+    x := 0
+    for i in 5 {
+        a <- x
+        x = <-b
+        _ = i
+    }
+    close(a)
+    _, ok := <-b
+    fmt.Println("pingpong:", x, ok, len(a), cap(a))
+}
+
+type Counter struct {
+    mu sync.Mutex
+    n  int
+}
+
+func (c *Counter) Inc(times int, wg *sync.WaitGroup) {
+    for i in times {
+        c.mu.Lock()
+        c.n++
+        c.mu.Unlock()
+        _ = i
+    }
+    wg.Done()
+}
+
+func mutexes() {
+    c := &Counter{}
+    var wg sync.WaitGroup
+    for i in 8 {
+        wg.Add(1)
+        go c.Inc(2000, &wg)
+        _ = i
+    }
+    wg.Wait()
+    fmt.Println("mutex:", c.n)
+}
+
+func delayed(ch chan string, d time.Duration, msg string) {
+    time.Sleep(d)
+    ch <- msg
+}
+
+func selects() {
+    empty := make(chan int)
+    select {
+    case v := <-empty:
+        fmt.Println("unexpected", v)
+    default:
+        fmt.Println("select: default")
+    }
+    fast := make(chan string)
+    slow := make(chan string)
+    go delayed(fast, 5 * time.Millisecond, "fast")
+    go delayed(slow, 300 * time.Millisecond, "slow")
+    select {
+    case m := <-fast:
+        fmt.Println("select:", m)
+    case m := <-slow:
+        fmt.Println("select:", m)
+    }
+    buf := make(chan int, 1)
+    select {
+    case buf <- 42:
+        fmt.Println("select: sent", len(buf))
+    default:
+        fmt.Println("select: full")
+    }
+    select {
+    case buf <- 43:
+        fmt.Println("select: sent again")
+    default:
+        fmt.Println("select: full")
+    }
+    done := make(chan bool)
+    close(done)
+    select {
+    case v, ok := <-done:
+        fmt.Println("select: closed", v, ok)
+    }
+    var nilch chan int
+    fmt.Println("nil chan:", nilch == nil, len(nilch))
+}
+
+@throws
+func risky(n int) int {
+    if n % 3 == 0 { throw Exception(f"bad {n}") }
+    return n
+}
+
+func safeWorker(id int, out chan string) {
+    try {
+        out <- f"w{id}={risky(id)}"
+    } catch e: Exception {
+        out <- f"w{id}:{e.TypeName()}:{e.Message()}"
+    }
+}
+
+func exceptionsInGoroutines() {
+    out := make(chan string, 10)
+    for i in 6 {
+        go safeWorker(i + 1, out)
+    }
+    got := make([]string, 7)
+    for i in 6 {
+        s := <-out
+        // sort by id: "wN..." -> N
+        got[int(s[1] - '0')] = s
+        _ = i
+    }
+    for s in got[1:] {
+        fmt.Println(s)
+    }
+}
+
+func main() {
+    pool()
+    pingPong()
+    mutexes()
+    selects()
+    exceptionsInGoroutines()
+    start := time.Now()
+    time.Sleep(20 * time.Millisecond)
+    el := time.Since(start)
+    fmt.Println("slept enough:", el >= 20 * time.Millisecond, el.Milliseconds() < 1000)
+}

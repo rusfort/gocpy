@@ -1,0 +1,62 @@
+package main
+
+import "std/fmt"
+
+type User struct {
+    ID   int
+    Name string
+}
+
+func sum(xs ...int) int {
+    t := 0
+    for x in xs {
+        t += x
+    }
+    return t
+}
+
+func main() {
+    xs := []int{5, 3, 8}
+    xs.append(1, 2)
+    xs = append(xs, 100)
+    fmt.Println(xs, len(xs))
+    fmt.Println(xs[1:3], xs[:2], xs[4:])
+    squares := [x * x for x in xs if x % 2 == 1]
+    fmt.Println(squares)
+    idx := [i for i, x in xs if x > 4]
+    fmt.Println(idx)
+    fmt.Println(sum(), sum(1, 2, 3), sum(xs...))
+    users := []User{{1, "Ann"}, {2, "Bob"}}
+    users.append(User{3, "Eve"})
+    for i, u in users {
+        fmt.Println(i, u.Name)
+    }
+    names := [u.Name for u in users]
+    fmt.Println(names)
+    var arr [4]int
+    arr[2] = 7
+    fmt.Println(arr, len(arr))
+    sl := arr[1:3]
+    sl[0] = 42
+    fmt.Println(arr)
+    grid := [2][3]int{{1, 2, 3}, {4, 5, 6}}
+    fmt.Println(grid, grid[1][2])
+    m := make([]string, 2, 10)
+    m[1] = "z"
+    fmt.Println(len(m), cap(m), m)
+    for i in 3 {
+        fmt.Print(i)
+    }
+    fmt.Println()
+    for r in "héllo" {
+        fmt.Print(r, " ")
+    }
+    fmt.Println()
+    s := "hello, world"
+    fmt.Println(s[7:], s[0], len(s))
+    b := []byte(s[:5])
+    b[0] = 'H'
+    fmt.Println(string(b))
+    var empty []int
+    fmt.Println(empty == nil, len(empty), empty)
+}

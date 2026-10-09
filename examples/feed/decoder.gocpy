@@ -1,0 +1,55 @@
+package feed
+
+import "std/net"
+
+@packed
+@align(1)
+type Tick struct {
+    Seq   uint64
+    Price int64
+    Qty   uint32
+    Side  uint8
+}
+
+type InvalidPacket struct {
+    Size int
+}
+
+func (e InvalidPacket) Error() string {
+    return f"invalid packet: {e.Size} bytes"
+}
+
+@inline
+@throws(InvalidPacket)
+func Decode(buf []byte) []Tick {
+    if len(buf) % sizeof(Tick) != 0 {
+        throw InvalidPacket{len(buf)}
+    }
+    out := make([]Tick, 0, len(buf) / sizeof(Tick))
+    unsafe {
+        p := (*Tick)(&buf[0])
+        end := p + len(buf) / sizeof(Tick)
+        for ; p < end; p++ {
+            out.append(@be_to_le(*p))
+        }
+    }
+    return out
+}
+
+func Listen(addr string, sink chan[Tick]) error {
+    conn := net.ListenUDP(addr)?
+    defer conn.Close()
+    buf := make([]byte, 65536)
+    for {
+        n := conn.Read(buf)?
+        try {
+            for t in Decode(buf[:n]) {
+                sink <- t
+            }
+        } catch e: InvalidPacket {
+            log(e)
+        } catch e {
+            return e
+        }
+    }
+}

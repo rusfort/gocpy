@@ -1,0 +1,4 @@
+file: decoder.gocpy
+opt: 3
+flags: [-march=native]
+nogc: true

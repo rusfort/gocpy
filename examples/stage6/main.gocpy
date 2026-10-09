@@ -1,0 +1,181 @@
+package main
+
+import (
+	"std/errors"
+	"std/fmt"
+)
+
+type Number interface {
+	~int | ~int64 | ~float64
+}
+
+type MyInt int
+
+func Sum[T Number](xs []T) T {
+	var s T
+	for x in xs {
+		s += x
+	}
+	return s
+}
+
+func Map[T, U any](xs []T, f func(T) U) []U {
+	out := []U{}
+	for x in xs {
+		out = append(out, f(x))
+	}
+	return out
+}
+
+func Max[T int | float64 | string](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func Keys[K comparable, V any](m map[K]V) []K {
+	out := []K{}
+	for k in m {
+		out = append(out, k)
+	}
+	return out
+}
+
+type Stack[T any] struct {
+	items []T
+}
+
+func (s *Stack[T]) Push(x T) {
+	s.items = append(s.items, x)
+}
+
+func (s *Stack[T]) Pop() (T, error) {
+	var zero T
+	if len(s.items) == 0 {
+		return zero, errors.New("empty stack")
+	}
+	x := s.items[len(s.items)-1]
+	s.items = s.items[:len(s.items)-1]
+	return x, nil
+}
+
+func (s Stack[T]) Len() int { return len(s.items) }
+
+type Pair[K comparable, V any] struct {
+	Key K
+	Val V
+}
+
+func (p Pair[K, V]) String() string { return f"{p.Key}={p.Val}" }
+
+type Node[T any] struct {
+	val  T
+	next *Node[T]
+}
+
+type List[T any] struct {
+	head *Node[T]
+	n    int
+}
+
+func (l *List[T]) Add(v T) {
+	l.head = &Node[T]{val: v, next: l.head}
+	l.n++
+}
+
+func (l *List[T]) Each(f func(T)) {
+	for p := l.head; p != nil; p = p.next {
+		f(p.val)
+	}
+}
+
+type Stringer interface {
+	String() string
+}
+
+func Join[T Stringer](xs []T, sep string) string {
+	s := ""
+	for i, x in xs {
+		if i > 0 {
+			s += sep
+		}
+		s += x.String()
+	}
+	return s
+}
+
+@throws
+func First[T any](xs []T) T {
+	if len(xs) == 0 {
+		throw errors.New("no elements")
+	}
+	return xs[0]
+}
+
+type Counter struct {
+	n int
+}
+
+func (c *Counter) Inc() int {
+	c.n++
+	return c.n
+}
+
+func (c Counter) Get() int { return c.n }
+
+func twice(f func() int) int {
+	f()
+	return f()
+}
+
+func main() {
+	fmt.Println(Sum([]int{1, 2, 3}), Sum([]float64{1.5, 2.5}), Sum([]MyInt{4, 5}))
+	fmt.Println(Map([]int{1, 2, 3}, func(x int) string { return f"<{x}>" }))
+	fmt.Println(Max(3, 7), Max(2.5, 1), Max("a", "b"), Max[float64](1, 2))
+	fmt.Println(len(Keys(map[string]int{"a": 1, "b": 2})))
+
+	var st Stack[string]
+	st.Push("x")
+	st.Push("y")
+	fmt.Println(st.Len())
+	v, err := st.Pop()
+	fmt.Println(v, err)
+	_, _ = st.Pop()
+	_, err = st.Pop()
+	fmt.Println(err)
+
+	ps := []Pair[string, int]{{"a", 1}, Pair[string, int]{Key: "b", Val: 2}}
+	fmt.Println(Join(ps, ", "))
+	fmt.Println(ps[0])
+
+	var l List[float64]
+	l.Add(1.5)
+	l.Add(2.5)
+	total := 0.0
+	l.Each(func(x float64) { total += x })
+	fmt.Println(l.n, total)
+
+	try {
+		fmt.Println(First([]int{9}))
+		fmt.Println(First([]string{}))
+	} catch e: error {
+		fmt.Println("caught", e)
+	} catch {
+		fmt.Println("other")
+	}
+
+	c := Counter{}
+	inc := c.Inc
+	fmt.Println(twice(inc), c.n)
+	get := c.Get
+	c.n = 100
+	fmt.Println(get(), c.Get())
+	var s Stringer = ps[1]
+	str := s.String
+	fmt.Println(str())
+	fs := []func() int{c.Get, c.Inc}
+	fmt.Println(fs[1](), fs[0]())
+	ints := Map([]Counter{{1}, {2}}, func(k Counter) int { return k.Get() })
+	fmt.Println(ints)
+}

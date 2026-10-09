@@ -1,0 +1,108 @@
+package main
+
+import "std/fmt"
+
+@packed
+type Tick struct {
+	Seq   uint64
+	Price int64
+	Qty   uint32
+	Side  uint8
+}
+
+func decode(buf []byte) []Tick {
+	out := make([]Tick, 0, len(buf)/sizeof(Tick))
+	if len(buf) < sizeof(Tick) {
+		return out
+	}
+	unsafe {
+		p := (*Tick)(&buf[0])
+		end := p + len(buf)/sizeof(Tick)
+		for ; p < end; p++ {
+			out.append(@be_to_le(*p))
+		}
+	}
+	return out
+}
+
+// encode writes ticks in big-endian order
+func encode(ts []Tick) []byte {
+	buf := make([]byte, len(ts)*sizeof(Tick))
+	unsafe {
+		p := (*Tick)(&buf[0])
+		for i, t in ts {
+			p[i] = @le_to_be(t)
+		}
+	}
+	return buf
+}
+
+type Ring struct {
+	mem  *byte
+	size int
+	head int
+}
+
+func newRing(n int) *Ring {
+	r := &Ring{size: n}
+	unsafe {
+		r.mem = calloc(n)
+	}
+	return r
+}
+
+func (r *Ring) put(b byte) {
+	unsafe {
+		r.mem[r.head%r.size] = b
+	}
+	r.head++
+}
+
+func (r *Ring) bytes() []byte {
+	unsafe {
+		return slice(r.mem, r.size)
+	}
+}
+
+func (r *Ring) close() {
+	unsafe {
+		free(r.mem)
+		r.mem = nil
+	}
+}
+
+func sumInts(n int) int64 {
+	unsafe {
+		mem := (*int64)(malloc(n * sizeof(int64)))
+		// realloc may move the block: free the current pointer, not the original
+		defer func() { free(mem) }()
+		for i in n {
+			mem[i] = int64(i * i)
+		}
+		mem = (*int64)(realloc(mem, 2*n*sizeof(int64)))
+		memset(mem+n, 0, n*sizeof(int64))
+		memcpy(mem+n, mem, 3*sizeof(int64))
+		s := int64(0)
+		for q := mem; q < mem+2*n; q++ {
+			s += *q
+		}
+		fmt.Println("span", (mem+2*n)-mem, uintptr(mem+1)-uintptr(mem))
+		return s
+	}
+}
+
+func main() {
+	ts := []Tick{{1, -5, 100, 1}, {2, 1234567, 7, 2}}
+	buf := encode(ts)
+	fmt.Println(len(buf), buf[7], buf[15])
+	fmt.Println(decode(buf))
+	fmt.Println(@be_to_le(uint32(0x01020304)) == 0x04030201, @le_to_be(uint16(0xABCD)))
+
+	r := newRing(4)
+	for b in []byte{1, 2, 3, 4, 5, 6} {
+		r.put(b)
+	}
+	fmt.Println(r.bytes())
+	r.close()
+	fmt.Println(sumInts(5))
+}

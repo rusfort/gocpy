@@ -1,0 +1,112 @@
+package main
+
+import (
+    "std/errors"
+    "std/fmt"
+)
+
+type Shape interface {
+    Area() float64
+    Name() string
+}
+
+type Rect struct {
+    w float64
+    h float64
+}
+
+func (r Rect) Area() float64 { return r.w * r.h }
+func (r Rect) Name() string  { return "rect" }
+
+type Circle struct{ r float64 }
+
+func (c *Circle) Area() float64 { return 3.0 * c.r * c.r }
+func (c *Circle) Name() string  { return "circle" }
+
+type NotFound struct{ key string }
+
+func (e NotFound) Error() string { return "not found: " + e.key }
+
+func find(m map[string]int, k string) (int, error) {
+    v, ok := m[k]
+    if !ok {
+        return 0, NotFound{k}
+    }
+    return v, nil
+}
+
+func sum(m map[string]int, keys []string) (int, error) {
+    total := 0
+    for k in keys {
+        v := find(m, k)?
+        total += v
+    }
+    return total, nil
+}
+
+func counter() func() int {
+    n := 0
+    return func() int {
+        n++
+        return n
+    }
+}
+
+func apply(xs []int, f func(int) int) []int {
+    return [f(x) for x in xs]
+}
+
+func double(x int) int { return x * 2 }
+
+func describe(x any) string {
+    switch v := x.(type) {
+    case int:
+        return f"int {v}"
+    case string:
+        return "string " + v
+    case Shape:
+        return "shape " + v.Name()
+    case nil:
+        return "nil"
+    default:
+        return "other"
+    }
+}
+
+func work() (res int) {
+    defer func() { res *= 10 }()
+    defer func() { fmt.Println("deferred 1") }()
+    return 4
+}
+
+func main() {
+    shapes := []Shape{Rect{2, 3}, &Circle{1}}
+    for s in shapes {
+        fmt.Println(s.Name(), s.Area())
+    }
+    m := map[string]int{"a": 1, "b": 2}
+    m["c"] = 3
+    m["a"] += 10
+    delete(m, "b")
+    fmt.Println(len(m), m)
+    for k, v in m {
+        fmt.Println(k, v)
+    }
+    t, err := sum(m, []string{"a", "c"})
+    fmt.Println(t, err)
+    _, err = sum(m, []string{"a", "zz"})
+    fmt.Println(err)
+    if nf, ok := err.(NotFound); ok {
+        fmt.Println("key", nf.key)
+    }
+    c := counter()
+    c()
+    fmt.Println(c(), c())
+    fmt.Println(apply([]int{1, 2, 3}, double), apply([]int{1, 2}, func(x int) int { return x + 100 }))
+    fmt.Println(describe(5), describe("s"), describe(Rect{1, 1}), describe(nil), describe(2.5))
+    fmt.Println(work())
+    e2 := errors.New("boom")
+    fmt.Println(e2, e2 == nil, err != nil)
+    var sh Shape
+    fmt.Println(sh == nil)
+}

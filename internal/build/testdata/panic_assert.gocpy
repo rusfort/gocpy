@@ -1,0 +1,10 @@
+package main
+
+import "std/fmt"
+
+func main() {
+	var x any = "s"
+	fmt.Println("before")
+	n := x.(int)
+	fmt.Println(n)
+}

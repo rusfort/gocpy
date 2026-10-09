@@ -1,0 +1,175 @@
+package main
+
+import "std/fmt"
+
+type ParseError struct {
+    Line int
+    Msg  string
+}
+
+func (e ParseError) String() string { return f"line {e.Line}: {e.Msg}" }
+
+type NotFound struct {
+    Key string
+}
+
+type Limit struct {
+    Max int
+}
+
+@throws
+func parseDigit(s string, line int) int {
+    if len(s) != 1 || s[0] < '0' || s[0] > '9' {
+        throw ParseError{line, f"bad digit {s}"}
+    }
+    return int(s[0] - '0')
+}
+
+@throws
+func sumDigits(xs []string) int {
+    total := 0
+    for i, x in xs {
+        total += parseDigit(x, i + 1)
+    }
+    return total
+}
+
+type Store struct {
+    keys []string
+}
+
+@throws
+func (s *Store) Index(key string) int {
+    for i, k in s.keys {
+        if k == key { return i }
+    }
+    throw NotFound{key}
+}
+
+@throws
+func check(n int) {
+    if n > 3 { throw Limit{3} }
+}
+
+func safeSum(xs []string) int {
+    try {
+        return sumDigits(xs)
+    } catch e: ParseError {
+        fmt.Println("parse error:", e)
+        return -1
+    } catch e {
+        fmt.Println("other:", e)
+        return -2
+    }
+}
+
+var log []string
+
+func withFinally(n int) int {
+    try {
+        log.append("try")
+        check(n)
+        log.append("ok")
+        return n * 10
+    } catch e: Limit {
+        log.append(f"limit {e.Max}")
+        return -1
+    } catch {
+        return -2
+    } finally {
+        log.append("finally")
+    }
+}
+
+@throws
+func rethrow(key string) int {
+    s := Store{[]string{"a", "b"}}
+    try {
+        return s.Index(key)
+    } catch e {
+        log.append("rethrow " + e.TypeName())
+        throw e
+    }
+}
+
+@throws
+func passThrough(n int) int {
+    try {
+        check(n)
+    } finally {
+        log.append(f"cleanup {n}")
+    }
+    return n
+}
+
+func loops() {
+    for i in 6 {
+        try {
+            if i == 1 { continue }
+            if i == 4 { break }
+            check(i)
+            fmt.Print(i, " ")
+        } catch e: Limit {
+            fmt.Print("L", e.Max, " ")
+        } catch {
+        } finally {
+            fmt.Print("f", i, " ")
+        }
+    }
+    fmt.Println()
+}
+
+func nested() string {
+    out := ""
+    try {
+        try {
+            throw NotFound{"inner"}
+        } catch e: Limit {
+            out += f"wrong {e.Max}"
+        } finally {
+            out += "[inner-finally]"
+        }
+    } catch e {
+        out += "[outer " + e.Message() + "]"
+    }
+    return out
+}
+
+func inExpressions() {
+    try {
+        xs := [parseDigit(s, 7) for s in []string{"1", "2", "x"}]
+        fmt.Println("unreachable", xs)
+    } catch e: ParseError {
+        fmt.Println("comprehension:", e.Line, e.Msg)
+    } catch {}
+    a := 0
+    try {
+        a = parseDigit("4", 1) + parseDigit("5", 2) * parseDigit("?", 3)
+    } catch e {
+        fmt.Println("expr:", e, "a still", a)
+    }
+}
+
+func main() {
+    fmt.Println(safeSum([]string{"1", "2", "3"}))
+    fmt.Println(safeSum([]string{"1", "x", "3"}))
+    fmt.Println(withFinally(2), withFinally(5))
+    fmt.Println(log)
+    log = []string{}
+    try {
+        fmt.Println(rethrow("b"))
+        fmt.Println(rethrow("zz"))
+    } catch e: NotFound {
+        fmt.Println("not found:", e.Key)
+    } catch {}
+    try {
+        fmt.Println(passThrough(1))
+        fmt.Println(passThrough(9))
+    } catch e {
+        fmt.Println("caught", e.TypeName(), e.Message())
+    }
+    fmt.Println(log)
+    loops()
+    fmt.Println(nested())
+    inExpressions()
+}

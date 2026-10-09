@@ -1,0 +1,75 @@
+package main
+
+import "std/fmt"
+
+type Money struct {
+    cents int64
+}
+
+@overload
+func (a Money) +(b Money) Money { return Money{a.cents + b.cents} }
+
+@overload
+func (a Money) *(k int64) Money { return Money{a.cents * k} }
+
+@overload
+func (a Money) ==(b Money) bool { return a.cents == b.cents }
+
+@overload
+func (a Money) <(b Money) bool { return a.cents < b.cents }
+
+@overload
+func (a Money) -() Money { return Money{-a.cents} }
+
+func (m Money) String() string {
+    return f"${m.cents / 100}.{m.cents % 100:02d}"
+}
+
+type Vec struct {
+    data []float64
+}
+
+@overload
+func (v Vec) [](i int) float64 { return v.data[i] * 10.0 }
+
+@overload
+func Max(a, b int) int {
+    if a > b { return a }
+    return b
+}
+
+@overload
+func Max(a, b float64) float64 {
+    if a > b { return a }
+    return b
+}
+
+@overload
+func Max(a, b, c int) int { return Max(Max(a, b), c) }
+
+@overload
+func Describe(s string) string { return "string:" + s }
+
+@overload
+func Describe(n int) string { return f"int:{n}" }
+
+func main() {
+    a := Money{1050}
+    b := Money{299}
+    fmt.Println(a + b, a * 3, (-b).cents)
+    fmt.Println(a == b, a != b, a < b, a > b, a <= a, a >= b)
+    total := Money{0}
+    total += a
+    total += b
+    fmt.Println(total)
+    v := Vec{[]float64{1.5, 2.5}}
+    fmt.Println(v[1])
+    fmt.Println(Max(3, 9), Max(2.5, 1.5), Max(1, 7, 4))
+    fmt.Println(Describe("x"), Describe(5))
+    switch a {
+    case b:
+        fmt.Println("same")
+    case Money{1050}:
+        fmt.Println("matched by @overload ==")
+    }
+}

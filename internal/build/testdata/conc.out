@@ -1,0 +1,16 @@
+pool: 50 42925
+pingpong: 5 false 0 0
+mutex: 16000
+select: default
+select: fast
+select: sent 1
+select: full
+select: closed false false
+nil chan: true 0
+w1=1
+w2=2
+w3:Exception:bad 3
+w4=4
+w5=5
+w6:Exception:bad 6
+slept enough: true true

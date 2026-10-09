@@ -1,0 +1,55 @@
+package main
+
+import "std/fmt"
+
+const Pi = 3.14159
+const Big = 1 << 40
+
+var counter int
+var greeting = "hi"
+
+func divmod(a, b int) (int, int) {
+    return a / b, a % b
+}
+
+func named(n int) (sum int, cnt int) {
+    for i := 0; i < n; i++ {
+        sum += i
+        cnt++
+    }
+    return
+}
+
+func fib(n int) int {
+    if n < 2 {
+        return n
+    }
+    return fib(n-1) + fib(n-2)
+}
+
+func main() {
+    q, r := divmod(17, 5)
+    fmt.Println(q, r)
+    s, c := named(5)
+    fmt.Println(s, c, fib(20))
+    fmt.Println(Pi, Big, Pi*2)
+    var x int8 = 127
+    x++
+    fmt.Println(x)
+    var u uint8 = 200
+    u += 100
+    fmt.Println(u)
+    fmt.Println(1.0/3.0, 1e6, 123456.0, 0.0001, 100.0)
+    fmt.Println(true && !false, 7 > 3, "abc" < "abd")
+    a, b := 1, 2
+    a, b = b, a
+    fmt.Println(a, b)
+    counter = counter + 10
+    fmt.Println(counter, greeting + " there", len(greeting))
+    fmt.Println(-7 / 2, -7 % 2, 1 << 3, 255 >> 4, 6 &^ 3, 5 ^ 1)
+    var f32 float32 = 0.1
+    fmt.Println(f32, float64(f32) > 0.1)
+    fmt.Print("no", "space", 1, 2, "\n")
+    fmt.Println(fmt.Sprint("x=", 42))
+    fmt.Println(string(rune(1046)), string(65), int('A'))
+}

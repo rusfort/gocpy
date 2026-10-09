@@ -1,0 +1,68 @@
+package main
+
+import "std/fmt"
+
+func classify(n int) string {
+    switch {
+    case n < 0:
+        return "negative"
+    case n == 0:
+        return "zero"
+    case n < 10:
+        return "small"
+    default:
+        return "large"
+    }
+}
+
+func weekday(d int) string {
+    switch d {
+    case 0, 6:
+        return "weekend"
+    case 5:
+        fallthrough
+    case 1, 2, 3, 4:
+        return "workday"
+    }
+    return "?"
+}
+
+func main() {
+    for n in []int{-5, 0, 3, 42} {
+        fmt.Println(n, classify(n))
+    }
+    fmt.Println(weekday(0), weekday(5), weekday(3), weekday(9))
+    total := 0
+    for i := 0; i < 100; i++ {
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 10 {
+            break
+        }
+        total += i
+    }
+    fmt.Println(total)
+    k := 0
+    for k < 5 {
+        k += 2
+    }
+    fmt.Println(k)
+    n := 0
+    for {
+        n++
+        if n == 3 { break }
+    }
+    fmt.Println(n)
+    if x := n * 2; x > 5 {
+        fmt.Println("big", x)
+    } else if x > 2 {
+        fmt.Println("mid", x)
+    } else {
+        fmt.Println("small", x)
+    }
+    name := "Ann"
+    score := 93.456
+    fmt.Println(f"[{name:>6}] [{name:<6}] [{name:^7}] {score:.2f} {255:x} {255:X} {7:03d} {-42:x}")
+    fmt.Println(f"braces {{ok}} and {len(name) + 1} and {[x * 2 for x in [3]int{1, 2, 3}]}")
+}

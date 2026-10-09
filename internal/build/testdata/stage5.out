@@ -1,0 +1,27 @@
+3
+[1 4 9]
+21
+P(1,2) P(1,2)
+p P(3,4)
+is P 1
+false
+2 a true
+map[x:[1 2]]
+map[a:2 b:1]
+map[b:1]
+8 <nil>
+0 myerr 7
+code 7
+false
+body
+defer 2
+defer 1
+defer 0
+caught myerr 5
+cleanup
+45
+num 1
+other s
+num 2.5
+str P(0,0)
+nil

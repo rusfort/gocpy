@@ -1,0 +1,5 @@
+module: example.com/stage4
+version: 0.1.0
+build:
+  opt: 2
+  gc: boehm

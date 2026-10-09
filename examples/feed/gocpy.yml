@@ -1,0 +1,9 @@
+module: github.com/nkozakov/exchange-feed
+version: 0.1.0
+gocpy: "0.1"
+
+build:
+  targets: [linux/amd64, linux/arm64]
+  cc: clang
+  opt: 2
+  gc: boehm

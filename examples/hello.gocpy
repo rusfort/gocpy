@@ -1,0 +1,22 @@
+package main
+
+import "std/fmt"
+
+type User struct {
+    ID   int
+    Name string
+    Tags []string
+}
+
+func (u *User) Greeting() string {
+    return f"Hello, {u.Name}! You have {len(u.Tags)} tags"
+}
+
+func main() {
+    users := []User{{1, "Ann", nil}, {2, "Bob", []string{"admin"}}}
+    names := [u.Name for u in users if u.ID > 1]
+    for i, u in users {
+        fmt.Println(i, u.Greeting())
+    }
+    fmt.Println(names)
+}

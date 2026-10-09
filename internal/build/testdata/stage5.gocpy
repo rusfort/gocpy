@@ -1,0 +1,165 @@
+package main
+
+import (
+	"std/errors"
+	"std/fmt"
+	"std/sync"
+)
+
+type Stringer interface {
+	String() string
+}
+
+type Named interface {
+	Stringer
+	Name() string
+}
+
+type P struct {
+	x int
+	y int
+}
+
+func (p P) String() string { return f"P({p.x},{p.y})" }
+func (p *P) Name() string  { return "p" }
+
+type MyErr struct {
+	code int
+}
+
+func (e MyErr) Error() string { return f"myerr {e.code}" }
+
+func counter() func() int {
+	n := 0
+	return func() int {
+		n++
+		return n
+	}
+}
+
+func apply(xs []int, f func(int) int) []int {
+	out := []int{}
+	for x in xs {
+		out = append(out, f(x))
+	}
+	return out
+}
+
+func div(a, b int) (int, error) {
+	if b == 0 {
+		return 0, MyErr{code: 7}
+	}
+	return a / b, nil
+}
+
+func calc(a, b int) (int, error) {
+	q := div(a, b)?
+	return q * 2, nil
+}
+
+@throws
+func risky(n int) int {
+	if n > 2 {
+		throw MyErr{code: n}
+	}
+	return n
+}
+
+func deferOrder() {
+	for i in 3 {
+		defer func(v int) { fmt.Println("defer", v) }(i)
+	}
+	fmt.Println("body")
+}
+
+func deferThrow() {
+	defer func() { fmt.Println("cleanup") }()
+	try {
+		_ = risky(5)
+	} catch e: error {
+		fmt.Println("caught", e)
+	} catch {
+		fmt.Println("other")
+	}
+}
+
+func main() {
+	c := counter()
+	c()
+	c()
+	fmt.Println(c())
+	fmt.Println(apply([]int{1, 2, 3}, func(x int) int { return x * x }))
+	k := 10
+	add := func(x int) int { return x + k }
+	k = 20
+	fmt.Println(add(1))
+
+	var s Stringer = P{1, 2}
+	fmt.Println(s.String(), s)
+	p := &P{3, 4}
+	var n Named = p
+	var s2 Stringer = n
+	fmt.Println(n.Name(), s2.String())
+	if v, ok := s.(P); ok {
+		fmt.Println("is P", v.x)
+	}
+	_, ok := s.(Named)
+	fmt.Println(ok)
+
+	m := map[P]string{}
+	m[P{1, 1}] = "a"
+	m[P{2, 2}] = "b"
+	fmt.Println(len(m), m[P{1, 1}], m[P{9, 9}] == "")
+	mm := map[string][]int{}
+	mm["x"] = append(mm["x"], 1)
+	mm["x"] = append(mm["x"], 2)
+	fmt.Println(mm)
+	cnt := map[string]int{}
+	for w in []string{"a", "b", "a"} {
+		cnt[w] += 1
+	}
+	fmt.Println(cnt)
+	delete(cnt, "a")
+	fmt.Println(cnt)
+
+	r, err := calc(8, 2)
+	fmt.Println(r, err)
+	r, err = calc(8, 0)
+	fmt.Println(r, err)
+	if me, isMy := err.(MyErr); isMy {
+		fmt.Println("code", me.code)
+	}
+	fmt.Println(errors.New("x") == errors.New("x"))
+
+	deferOrder()
+	deferThrow()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	total := 0
+	for i in 10 {
+		wg.Add(1)
+		go func(v int) {
+			mu.Lock()
+			total += v
+			mu.Unlock()
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println(total)
+
+	var anys []any = []any{1, "s", 2.5, P{0, 0}, nil}
+	for a in anys {
+		switch v := a.(type) {
+		case int, float64:
+			fmt.Println("num", v)
+		case Stringer:
+			fmt.Println("str", v.String())
+		case nil:
+			fmt.Println("nil")
+		default:
+			fmt.Println("other", v)
+		}
+	}
+}

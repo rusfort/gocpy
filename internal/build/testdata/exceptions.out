@@ -1,0 +1,14 @@
+6
+parse error: line 2: bad digit x
+-1
+20 -1
+[try ok finally try limit 3 finally]
+1
+not found: zz
+1
+caught main.Limit {3}
+[rethrow main.NotFound cleanup 1 cleanup 9]
+0 f0 f1 2 f2 3 f3 f4 
+[inner-finally][outer {inner}]
+comprehension: 7 bad digit x
+expr: main.ParseError: line 3: bad digit ? a still 0

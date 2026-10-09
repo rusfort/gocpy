@@ -1,0 +1,68 @@
+# GoReleaser: `git tag v0.1.0 && git push --tags` -> GitHub Actions builds the release.
+version: 2
+project_name: gocpy
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: gocpy
+    main: ./cmd/gocpy
+    binary: gocpy
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "gocpy_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE, examples/**/*]
+
+checksum:
+  name_template: checksums.txt
+
+# Homebrew tap: repository rusfort/homebrew-tap, token in secret HOMEBREW_TAP_TOKEN
+brews:
+  - name: gocpy
+    repository:
+      owner: rusfort
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/rusfort/gocpy
+    description: Gocpy compiler (Go-like language compiled to native code via C)
+    license: MIT
+    dependencies:
+      - name: bdw-gc
+    test: |
+      system "#{bin}/gocpy", "version"
+    install: |
+      bin.install "gocpy"
+
+# Linux packages: .deb (Debian/Ubuntu), .rpm (Fedora/RHEL), .apk (Alpine)
+nfpms:
+  - id: packages
+    package_name: gocpy
+    vendor: Gocpy
+    homepage: https://github.com/rusfort/gocpy
+    maintainer: rusfort <owner@example.com>
+    description: Gocpy compiler (Go-like language compiled to native code via C)
+    license: MIT
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    overrides:
+      deb:
+        dependencies: [gcc, libgc-dev]
+      rpm:
+        dependencies: [gcc, gc-devel]
+      apk:
+        dependencies: [gcc, musl-dev, gc-dev]
+
+release:
+  github:
+    owner: rusfort
+    name: gocpy

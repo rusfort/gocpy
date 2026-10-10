@@ -49,7 +49,7 @@ nfpms:
     package_name: gocpy
     vendor: Gocpy
     homepage: https://github.com/rusfort/gocpy
-    maintainer: rusfort <owner@example.com>
+    maintainer: rusfort <info@box-messenger.tech>
     description: Gocpy compiler (Go-like language compiled to native code via C)
     license: MIT
     formats: [deb, rpm, apk]

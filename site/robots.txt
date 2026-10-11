@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://rusfort.github.io/gocpy/sitemap.xml

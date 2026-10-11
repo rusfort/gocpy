@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-gocpy">
+    <comment>Gocpy source code</comment>
+    <comment xml:lang="ru">Исходный код Gocpy</comment>
+    <sub-class-of type="text/plain"/>
+    <icon name="text-x-gocpy"/>
+    <glob pattern="*.gocpy"/>
+  </mime-type>
+</mime-info>

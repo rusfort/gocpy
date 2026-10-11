@@ -1,0 +1,36 @@
+{
+  "name": "gocpy",
+  "displayName": "Gocpy",
+  "description": "Gocpy language support: syntax highlighting and file icon for .gocpy files",
+  "version": "0.1.0",
+  "publisher": "rusfort",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": { "color": "#0B1020", "theme": "dark" },
+  "repository": { "type": "git", "url": "https://github.com/rusfort/gocpy" },
+  "homepage": "https://rusfort.github.io/gocpy/",
+  "engines": { "vscode": "^1.64.0" },
+  "categories": ["Programming Languages"],
+  "keywords": ["gocpy", "go", "c", "python", "compiler"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gocpy",
+        "aliases": ["Gocpy", "gocpy"],
+        "extensions": [".gocpy"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/gocpy-file.svg",
+          "dark": "./icons/gocpy-file.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gocpy",
+        "scopeName": "source.gocpy",
+        "path": "./syntaxes/gocpy.tmLanguage.json"
+      }
+    ]
+  }
+}

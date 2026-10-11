@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/gocpy-icon.svg" width="140" alt="Логотип Gocpy">
+</p>
+
 # Gocpy (Go-C-Py) — компилятор
 
 Язык, объединяющий простоту Go, контроль над памятью из C и лаконичность Python.
@@ -75,6 +79,8 @@ gocpy run examples/stage2
 - `std/time`: `Duration`, `Nanosecond` … `Hour`, `Sleep`, `Now`, `Since`, `d.Milliseconds()`, `d.Seconds()`.
 - Ошибки рантайма как в Go: `send on closed channel`, `close of closed channel`, `all goroutines are asleep - deadlock!` (код 2).
 - Реализация MVP: горутина = поток pthread (зарегистрирован в Boehm GC), исключения — на поток; каналы/WaitGroup/Mutex используют одну блокировку рантайма. Проверено ThreadSanitizer и ASan.
+
+Ещё не поддерживается: unsafe/malloc (этап 5), defer, дженерики, интерфейсы, `any`, map, замыкания (в том числе `go func(){...}()`), `.go` файлы в модуле.
 
 ## Этап 5: замыкания, defer, map, интерфейсы
 

@@ -60,6 +60,25 @@ nfpms:
     license: MIT
     formats: [deb, rpm, apk]
     bindir: /usr/bin
+    contents:
+      - src: packaging/linux/gocpy-mime.xml
+        dst: /usr/share/mime/packages/gocpy.xml
+      - src: packaging/linux/icons/text-x-gocpy.svg
+        dst: /usr/share/icons/hicolor/scalable/mimetypes/text-x-gocpy.svg
+      - src: packaging/linux/icons/text-x-gocpy-16.png
+        dst: /usr/share/icons/hicolor/16x16/mimetypes/text-x-gocpy.png
+      - src: packaging/linux/icons/text-x-gocpy-32.png
+        dst: /usr/share/icons/hicolor/32x32/mimetypes/text-x-gocpy.png
+      - src: packaging/linux/icons/text-x-gocpy-48.png
+        dst: /usr/share/icons/hicolor/48x48/mimetypes/text-x-gocpy.png
+      - src: packaging/linux/icons/text-x-gocpy-64.png
+        dst: /usr/share/icons/hicolor/64x64/mimetypes/text-x-gocpy.png
+      - src: packaging/linux/icons/text-x-gocpy-128.png
+        dst: /usr/share/icons/hicolor/128x128/mimetypes/text-x-gocpy.png
+      - src: packaging/linux/icons/text-x-gocpy-256.png
+        dst: /usr/share/icons/hicolor/256x256/mimetypes/text-x-gocpy.png
+    scripts:
+      postinstall: packaging/linux/postinstall.sh
     overrides:
       deb:
         dependencies: [gcc, libgc-dev]

@@ -1,0 +1,44 @@
+<!--
+  Add these keys to the Info.plist of the Gocpy IDE app bundle (YourIDE.app/Contents/Info.plist).
+  Put gocpy-file.icns into YourIDE.app/Contents/Resources/.
+  macOS assigns file icons only through an application that declares the type:
+  after the app is installed (or launched once), Finder shows this icon for *.gocpy.
+-->
+<key>UTExportedTypeDeclarations</key>
+<array>
+  <dict>
+    <key>UTTypeIdentifier</key>
+    <string>com.github.rusfort.gocpy.source</string>
+    <key>UTTypeDescription</key>
+    <string>Gocpy source code</string>
+    <key>UTTypeConformsTo</key>
+    <array>
+      <string>public.source-code</string>
+      <string>public.plain-text</string>
+    </array>
+    <key>UTTypeIconFile</key>
+    <string>gocpy-file.icns</string>
+    <key>UTTypeTagSpecification</key>
+    <dict>
+      <key>public.filename-extension</key>
+      <array><string>gocpy</string></array>
+      <key>public.mime-type</key>
+      <array><string>text/x-gocpy</string></array>
+    </dict>
+  </dict>
+</array>
+<key>CFBundleDocumentTypes</key>
+<array>
+  <dict>
+    <key>CFBundleTypeName</key>
+    <string>Gocpy source code</string>
+    <key>CFBundleTypeRole</key>
+    <string>Editor</string>
+    <key>LSHandlerRank</key>
+    <string>Owner</string>
+    <key>CFBundleTypeIconFile</key>
+    <string>gocpy-file.icns</string>
+    <key>LSItemContentTypes</key>
+    <array><string>com.github.rusfort.gocpy.source</string></array>
+  </dict>
+</array>

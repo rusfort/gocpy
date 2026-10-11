@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gocpy — язык программирования: синтаксис Go, скорость C, простота Python</title>
+<meta name="description" content="Gocpy — компилируемый язык программирования со статической типизацией, синтаксисом в духе Go, генерацией C и сборщиком мусора. Компилятор gocpy написан на Go.">
+<link rel="canonical" href="https://rusfort.github.io/gocpy/">
+<link rel="icon" href="/gocpy/favicon.ico" sizes="48x48">
+<link rel="icon" href="/gocpy/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/gocpy/favicon-96x96.png" type="image/png" sizes="96x96">
+<link rel="apple-touch-icon" href="/gocpy/apple-touch-icon.png">
+<link rel="manifest" href="/gocpy/site.webmanifest">
+<meta name="theme-color" content="#0B1020">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Gocpy">
+<meta property="og:title" content="Gocpy — язык программирования">
+<meta property="og:description" content="Синтаксис Go, скорость C, простота Python.">
+<meta property="og:url" content="https://rusfort.github.io/gocpy/">
+<meta property="og:image" content="https://rusfort.github.io/gocpy/og-image.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Логотип Gocpy">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://rusfort.github.io/gocpy/#org",
+      "name": "Gocpy",
+      "url": "https://rusfort.github.io/gocpy/",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://rusfort.github.io/gocpy/gocpy-logo.png",
+        "width": 512,
+        "height": 512
+      },
+      "sameAs": ["https://github.com/rusfort/gocpy"]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "gocpy",
+      "alternateName": "Gocpy compiler",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS",
+      "url": "https://rusfort.github.io/gocpy/",
+      "downloadUrl": "https://github.com/rusfort/gocpy/releases",
+      "image": "https://rusfort.github.io/gocpy/gocpy-logo.png",
+      "license": "https://opensource.org/licenses/MIT",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "publisher": { "@id": "https://rusfort.github.io/gocpy/#org" }
+    }
+  ]
+}
+</script>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: #0B1020; color: #E8F0FF; line-height: 1.6; }
+  main { max-width: 760px; margin: 0 auto; padding: 64px 24px; }
+  header { display: flex; align-items: center; gap: 24px; }
+  header img { width: 112px; height: 112px; }
+  h1 { font-size: 3rem; margin: 0; letter-spacing: -0.02em; }
+  .tag { color: #96C8FF; margin: 4px 0 0; }
+  pre { background: #111a33; border: 1px solid #1f2b52; border-radius: 10px; padding: 16px; overflow-x: auto; }
+  code { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  a { color: #19F0FF; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="gocpy-logo.png" alt="Логотип языка программирования Gocpy" width="112" height="112">
+    <div>
+      <h1>Gocpy</h1>
+      <p class="tag">Синтаксис Go, скорость C, простота Python</p>
+    </div>
+  </header>
+  <p>Gocpy — компилируемый язык программирования со статической типизацией. Компилятор <code>gocpy</code> написан на Go, генерирует C и собирает нативный бинарник со сборщиком мусора Boehm GC. Исходники — файлы <code>.gocpy</code>, настройки модуля — <code>gocpy.yml</code>.</p>
+  <h2>Установка</h2>
+<pre><code>brew install --cask rusfort/tap/gocpy
+curl -fsSL https://raw.githubusercontent.com/rusfort/gocpy/main/install.sh | sh
+go install github.com/rusfort/gocpy/cmd/gocpy@latest</code></pre>
+  <h2>Пример</h2>
+<pre><code>package main
+
+import "std/fmt"
+
+func main() {
+    for i in 3 {
+        fmt.Println(f"hello, gocpy {i}")
+    }
+}</code></pre>
+  <p>Исходный код и документация: <a href="https://github.com/rusfort/gocpy">github.com/rusfort/gocpy</a></p>
+</main>
+</body>
+</html>

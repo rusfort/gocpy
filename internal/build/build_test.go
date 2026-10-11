@@ -10,18 +10,29 @@ import (
 )
 
 // gcMode returns "boehm" if libgc is available, else "none".
+// It uses the same libgc discovery as Build (pkg-config, Homebrew prefixes).
+// With GOCPY_REQUIRE_GC=1 (CI) a missing libgc fails the test instead.
 func gcMode(t *testing.T) string {
-	if _, err := exec.LookPath("cc"); err != nil {
+	cc := CCompiler()
+	if _, err := exec.LookPath(cc); err != nil {
 		t.Skip("no C compiler")
 	}
 	dir := t.TempDir()
 	src := filepath.Join(dir, "x.c")
 	os.WriteFile(src, []byte("#include <gc.h>\nint main(void){GC_INIT();return 0;}\n"), 0o644)
-	if exec.Command("cc", src, "-lgc", "-o", filepath.Join(dir, "x")).Run() == nil {
+	cf, lf := gcFlags()
+	args := append(append(append([]string{}, cf...), src, "-o", filepath.Join(dir, "x")), lf...)
+	if out, err := exec.Command(cc, args...).CombinedOutput(); err == nil {
 		return "boehm"
+	} else if os.Getenv("GOCPY_REQUIRE_GC") == "1" {
+		t.Fatalf("libgc not found (GOCPY_REQUIRE_GC=1): %v\n%s", err, out)
 	}
+	t.Log("libgc not found: testing with gc: none")
 	return "none"
 }
+
+// gcOnly lists tests that need the Boehm GC (checks done by the GC runtime).
+var gcOnly = map[string]bool{"panic_freegc": true}
 
 func buildAndRun(t *testing.T, gocpyFile, gc string) (stdout, stderr string, code int) {
 	t.Helper()
@@ -55,6 +66,9 @@ func TestGolden(t *testing.T) {
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), ".gocpy")
 		t.Run(name, func(t *testing.T) {
+			if gc != "boehm" && gcOnly[name] {
+				t.Skip("requires gc: boehm")
+			}
 			want, err := os.ReadFile(strings.TrimSuffix(f, ".gocpy") + ".out")
 			if err != nil {
 				t.Fatal(err)

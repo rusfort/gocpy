@@ -16,4 +16,6 @@ jobs:
       - if: runner.os == 'macOS'
         run: brew install bdw-gc
       - run: go vet ./... && go test ./...
+        env:
+          GOCPY_REQUIRE_GC: "1"
       - run: go run ./cmd/gocpy doctor

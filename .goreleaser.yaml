@@ -25,23 +25,30 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# Homebrew tap: repository rusfort/homebrew-tap, token in secret HOMEBREW_TAP_TOKEN
-brews:
+# Homebrew tap: repository rusfort/homebrew-tap, token in secret HOMEBREW_TAP_TOKEN.
+# Since GoReleaser v2.10 pre-built binaries are published as a Cask (brews is deprecated).
+homebrew_casks:
   - name: gocpy
+    binaries: [gocpy]
     repository:
       owner: rusfort
       name: homebrew-tap
+      branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
     homepage: https://github.com/rusfort/gocpy
     description: Gocpy compiler (Go-like language compiled to native code via C)
     license: MIT
     dependencies:
-      - name: bdw-gc
-    test: |
-      system "#{bin}/gocpy", "version"
-    install: |
-      bin.install "gocpy"
+      - formula: bdw-gc
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gocpy"]
+          end
 
 # Linux packages: .deb (Debian/Ubuntu), .rpm (Fedora/RHEL), .apk (Alpine)
 nfpms:

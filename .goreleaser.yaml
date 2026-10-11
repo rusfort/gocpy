@@ -33,7 +33,6 @@ homebrew_casks:
     repository:
       owner: rusfort
       name: homebrew-tap
-      branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     commit_author:
       name: goreleaserbot

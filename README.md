@@ -7,31 +7,6 @@
 Язык, объединяющий простоту Go, контроль над памятью из C и лаконичность Python.
 Компилятор пишется на Go, бэкенд — генерация C, рантайм — на C.
 
-## Статус: этап 1 — фронтенд
-
-| Компонент | Пакет | Статус |
-|---|---|---|
-| Токены | `internal/token` | готово |
-| Лексер (авто-`;`, f-строки, `@`) | `internal/lexer` | готово |
-| AST + печать + обход | `internal/ast` | готово |
-| Парсер (рекурсивный спуск) | `internal/parser` | готово |
-| Ранние проверки `@throws` / `@overload` | `internal/check` | готово (MVP) |
-| Проверка типов | `internal/types` | дальше |
-| IR и генерация C | `internal/ir`, `internal/codegen/c` | дальше |
-| Чтение `.yml`, сборка | `internal/build` | дальше |
-| Рантайм (GC, планировщик) | `runtime/` | дальше |
-
-## Сборка и запуск
-
-```sh
-go build -o bin/gocpy ./cmd/gocpy
-go test ./...
-
-bin/gocpy tokens examples/hello.gocpy
-bin/gocpy parse  examples/hello.gocpy
-bin/gocpy check  examples/feed
-```
-
 ## Грамматика
 
 См. `docs/grammar.ebnf`.
@@ -49,7 +24,7 @@ bin/gocpy check  examples/feed
 - Единица компиляции — директория; `gocpy.yml` (модуль) и `<file>.yml` (настройки файла).
 - `in` — ключевое слово (`for x in xs`, comprehensions).
 
-## Этап 2: типы и генерация C
+## Типы и генерация C
 
 - `internal/types` — проверка типов: константы произвольной точности, перегрузка функций и операторов (`@overload`), запрет повторного `:=` в той же области видимости, запрет конфликтов имён с импортами, `in` — ключевое слово.
 - `internal/codegen/c` — генерация C (GNU C11), `runtime/c` — рантайм на C (строки, срезы, форматирование, проверки границ), GC — Boehm (`build.gc: boehm|none`).
@@ -60,7 +35,7 @@ gocpy build [-o out] [-emit-c dir] [-v] <dir|file>
 gocpy run examples/stage2
 ```
 
-## Этап 3: исключения и строгие правила
+## Исключения и строгие правила
 
 - `throw X` — X значение именованного типа; `catch e: T` ловит по типу, `catch e` / `catch` — всё (тип `e` — `Exception`: `Message()`, `TypeName()`, `String()`), `throw e` в catch — повторный выброс, `finally` выполняется при любом выходе (обычном, исключении, `return`, `break`, `continue`).
 - `@throws` проверяется точно, по разрешённым вызовам (с учётом перегрузок и методов): исключение не может покинуть функцию без `@throws`; `@throws` без выбросов — ошибка; вызовы `@throws` в инициализаторах пакета запрещены; `return/break/continue` не могут покидать `finally`.
@@ -70,7 +45,7 @@ gocpy run examples/stage2
 
 - Встроенное исключение в стиле Java: `throw Exception("сообщение")`; `catch e: Exception` — то же, что `catch e`.
 
-## Этап 4: горутины и каналы
+## Горутины и каналы
 
 - `go f(args)` и `go obj.Method(args)`: аргументы вычисляются в текущей горутине; точка входа не может быть `@throws`.
 - `chan T`, `make(chan T)` / `make(chan T, n)`, `ch <- v`, `<-ch`, `v, ok := <-ch`, `close(ch)`, `len`/`cap`, `for v in ch`.
@@ -82,7 +57,7 @@ gocpy run examples/stage2
 
 Ещё не поддерживается: unsafe/malloc (этап 5), defer, дженерики, интерфейсы, `any`, map, замыкания (в том числе `go func(){...}()`), `.go` файлы в модуле.
 
-## Этап 5: замыкания, defer, map, интерфейсы
+## Замыкания, defer, map, интерфейсы
 
 - Функциональные значения `func(...)`, литералы функций и замыкания. Захваченные переменные переносятся в кучу, поэтому замыкание видит последующие изменения.
 - `defer` вызывает функции, методы, функциональные значения, методы интерфейсов и `close`. Аргументы вычисляются в момент `defer`, вызовы выполняются в порядке LIFO, в том числе при исключении. Отложенная функция может менять именованные результаты.
@@ -103,7 +78,7 @@ gocpy run examples/stage2
 - переменная C-подобного `for` общая для всех итераций, а не своя на каждую;
 - `fmt` печатает map в порядке вставки;
 
-## Этап 6: дженерики и method values
+## Дженерики и method values
 
 - Дженерик-функции и дженерик-типы с методами: `func Map[T, U any](...)`, `type Stack[T any] struct {...}`, `func (s *Stack[T]) Push(x T)`.
 - Ограничения:
@@ -124,7 +99,7 @@ gocpy run examples/stage2
 - нет частичного явного указания аргументов типа (`F[int]` при двух параметрах);
 - нет method expressions (`T.M`).
 
-## Этап 7: unsafe, malloc и free
+## Unsafe, malloc и free
 
 Внутри `unsafe { ... }` доступны ручная память, арифметика указателей и приведения указателей. Вне блока эти имена не существуют: `malloc is only available inside an unsafe block`. Обычное имя `free` в остальном коде остаётся свободным.
 
@@ -145,6 +120,6 @@ gocpy run examples/stage2
 
 ## Установка
 
-Готовые бинарники для linux/darwin (amd64, arm64) выкладываются в GitHub Releases. Варианты установки: `brew install --cask rusfort/tap/gocpy`, `curl -fsSL .../install.sh | sh`, пакеты `.deb`, `.rpm`, `.apk` или `go install`. Подробности и порядок публикации описаны в [docs/RELEASE.md](docs/RELEASE.md).
+Готовые бинарники для linux/darwin (amd64, arm64) выкладываются в GitHub Releases. Варианты установки: `brew install --cask rusfort/tap/gocpy`, `curl -fsSL .../install.sh | sh`, пакеты `.deb`, `.rpm`, `.apk` или `go install`. 
 
 Для сборки программ нужны gcc или clang и libgc. Проверка окружения: `gocpy doctor`.

@@ -36,7 +36,7 @@ import (
 var genSource string
 
 // genVersion changes whenever generated code changes (cache key).
-const genVersion = "gocpy-gobridge-4"
+const genVersion = "gocpy-gobridge-5"
 
 // Request describes the Go side of a program.
 type Request struct {
@@ -71,12 +71,52 @@ type apiFunc struct {
 	Params  []string `json:"params"`
 	Results []string `json:"results"`
 	Error   bool     `json:"error"`
+	Names   []string `json:"names"`
+	Pos     string   `json:"pos"`
 }
 
 type apiConst struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Value string `json:"value"`
+	Pos   string `json:"pos"`
+}
+
+// GoPosPrefix starts the comment placed above each stub declaration with the
+// position of the Go declaration (used by the language server).
+const GoPosPrefix = "// go:pos "
+
+// paramNames picks readable, non-conflicting parameter names for a stub.
+func paramNames(f apiFunc, top map[string]bool) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := range f.Params {
+		n := ""
+		if i < len(f.Names) {
+			n = f.Names[i]
+		}
+		bad := n == "" || n == "_" || n == "e" || seen[n] || top[n] || reserved[n] ||
+			(len(n) > 1 && (n[0] == 'o' || n[0] == 'a') && strings.Trim(n[1:], "0123456789") == "")
+		if bad {
+			n = fmt.Sprintf("a%d", i)
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// reserved: Gocpy keywords and predeclared names (shadowing is forbidden).
+var reserved = map[string]bool{}
+
+func init() {
+	for _, k := range strings.Fields(`break case chan const continue default defer else fallthrough for func go
+		if import in interface map package range return select struct switch type var try catch finally throw unsafe
+		bool byte rune int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr float32 float64 string any
+		error Exception comparable true false nil iota len cap append make new sizeof close delete thread
+		malloc calloc realloc free memcpy memset slice errors`) {
+		reserved[k] = true
+	}
 }
 
 type apiPkg struct {
@@ -324,7 +364,18 @@ func stubSource(p apiPkg) string {
 	if needErrors {
 		b.WriteString("\nimport \"std/errors\"\n")
 	}
+	top := map[string]bool{}
+	for _, f := range p.Funcs {
+		top[f.Name] = true
+		top["gobr_"+strings.TrimPrefix(f.ID, "gocpy_gobrx_")] = true
+	}
 	for _, c := range p.Consts {
+		top[c.Name] = true
+	}
+	for _, c := range p.Consts {
+		if c.Pos != "" {
+			fmt.Fprintf(&b, "\n%s%s", GoPosPrefix, c.Pos)
+		}
 		if c.Type != "" {
 			fmt.Fprintf(&b, "\nconst %s %s = %s", c.Name, c.Type, c.Value)
 		} else {
@@ -334,17 +385,19 @@ func stubSource(p apiPkg) string {
 	b.WriteString("\n")
 	for _, f := range p.Funcs {
 		ext := strings.Replace(f.ID, "gobrx", "gobr", 1)
-		var params, args, outs []string
+		var params, args, outs, lowParams []string
+		names := paramNames(f, top)
 		for i, t := range f.Params {
-			params = append(params, fmt.Sprintf("a%d %s", i, t))
-			args = append(args, fmt.Sprintf("a%d", i))
+			params = append(params, fmt.Sprintf("%s %s", names[i], t))
+			lowParams = append(lowParams, fmt.Sprintf("a%d %s", i, t))
+			args = append(args, names[i])
 		}
 		for i, t := range f.Results {
 			outs = append(outs, fmt.Sprintf("o%d *%s", i, t))
 		}
 		low := "gobr_" + strings.TrimPrefix(f.ID, "gocpy_gobrx_")
 		fmt.Fprintf(&b, "\n@extern(%q)\nfunc %s(%s) int\n", ext, low,
-			strings.Join(append(append(append([]string{}, params...), outs...), "e *string"), ", "))
+			strings.Join(append(append(append([]string{}, lowParams...), outs...), "e *string"), ", "))
 		var rs []string
 		for _, t := range f.Results {
 			rs = append(rs, t)
@@ -358,6 +411,9 @@ func stubSource(p apiPkg) string {
 			ret = " " + rs[0]
 		case len(rs) > 1:
 			ret = " (" + strings.Join(rs, ", ") + ")"
+		}
+		if f.Pos != "" {
+			fmt.Fprintf(&b, "\n%s%s", GoPosPrefix, f.Pos)
 		}
 		fmt.Fprintf(&b, "\nfunc %s(%s)%s {\n", f.Name, strings.Join(params, ", "), ret)
 		var callArgs, vals []string

@@ -11,11 +11,12 @@ import (
 	"github.com/rusfort/gocpy/internal/ast"
 	"github.com/rusfort/gocpy/internal/build"
 	"github.com/rusfort/gocpy/internal/lexer"
+	"github.com/rusfort/gocpy/internal/lsp"
 	"github.com/rusfort/gocpy/internal/parser"
 )
 
 // version is set at release time: -ldflags "-X main.version=1.0.0"
-var version = "0.2.0"
+var version = "0.3.0"
 
 var usage = `gocpy — Gocpy toolchain ` + version + `
 
@@ -33,6 +34,7 @@ Usage:
   gocpy mod    download          download all requirements, update gocpy.sum
   gocpy mod    verify            check downloaded modules against gocpy.sum
   gocpy mod    graph             print the requirement graph and selected versions
+  gocpy lsp                      run the language server (stdio), used by editors
   gocpy doctor                   check the C compiler, libgc and the Go toolchain
   gocpy version
 `
@@ -63,6 +65,8 @@ func main() {
 		err = cmdMod(args)
 	case "test", "fmt":
 		err = fmt.Errorf("gocpy %s: not implemented yet", cmd)
+	case "lsp":
+		err = lsp.Serve(os.Stdin, os.Stdout, version)
 	case "doctor":
 		if err := build.Doctor(func(f string, a ...any) { fmt.Printf(f, a...) }); err != nil {
 			fmt.Fprintln(os.Stderr, "doctor:", err)

@@ -1,0 +1,141 @@
+{
+  "Программа": {
+    "prefix": "main",
+    "body": [
+      "package main",
+      "",
+      "import \"std/fmt\"",
+      "",
+      "func main() {",
+      "\tfmt.Println(\"${1:Привет, Gocpy}\")$0",
+      "}"
+    ],
+    "description": "Пакет main с функцией main"
+  },
+  "Метод": {
+    "prefix": "meth",
+    "body": [
+      "func (${1:r} ${2:*T}) ${3:Name}(${4}) ${5}{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Метод типа"
+  },
+  "Функция с @throws": {
+    "prefix": "tfunc",
+    "body": [
+      "@throws",
+      "func ${1:name}(${2}) ${3}{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Функция, выбрасывающая исключения"
+  },
+  "Перегрузка": {
+    "prefix": "ofunc",
+    "body": [
+      "@overload",
+      "func ${1:name}(${2}) ${3}{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Перегруженная функция (@overload обязательна)"
+  },
+  "Оператор": {
+    "prefix": "opfunc",
+    "body": [
+      "func (${1:a} ${2:T}) ${3:+}(${4:b} ${2:T}) ${2:T} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Метод-оператор"
+  },
+  "Структура": {
+    "prefix": "struct",
+    "body": [
+      "type ${1:Name} struct {",
+      "\t${2:Field} ${3:int}",
+      "}"
+    ],
+    "description": "Структурный тип"
+  },
+  "Интерфейс": {
+    "prefix": "iface",
+    "body": [
+      "type ${1:Name} interface {",
+      "\t${2:Method}() ${3:string}",
+      "}"
+    ],
+    "description": "Интерфейс"
+  },
+  "Дженерик": {
+    "prefix": "gfunc",
+    "body": [
+      "func ${1:Name}[${2:T} ${3:any}](${4:x} ${2:T}) ${2:T} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Функция с параметром типа"
+  },
+  "Цикл со счётчиком": {
+    "prefix": "fori",
+    "body": [
+      "for ${1:i} := 0; ${1:i} < ${2:n}; ${1:i}++ {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for i := 0; i < n; i++"
+  },
+  "Цикл for in": {
+    "prefix": "forin",
+    "body": [
+      "for ${1:i}, ${2:x} in ${3:xs} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Обход с индексом"
+  },
+  "Проверка ошибки": {
+    "prefix": "iferr",
+    "body": [
+      "if err != nil {",
+      "\treturn ${1:err}",
+      "}"
+    ],
+    "description": "if err != nil"
+  },
+  "try / catch / finally": {
+    "prefix": "tcf",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch ${2:e} {",
+      "\t$3",
+      "} finally {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Полный блок исключений"
+  },
+  "Генератор списка": {
+    "prefix": "comp",
+    "body": [
+      "[${1:x} for ${1:x} in ${2:xs} if ${3:cond}]"
+    ],
+    "description": "Генератор списка"
+  },
+  "f-строка": {
+    "prefix": "fs",
+    "body": [
+      "f\"${1:text} {${2:expr}}\""
+    ],
+    "description": "Форматированная строка"
+  },
+  "Игнорировать неиспользуемое": {
+    "prefix": "ignore",
+    "body": [
+      "//gocpy:ignore:unused"
+    ],
+    "description": "Подавить ошибку о неиспользуемом объявлении"
+  }
+}

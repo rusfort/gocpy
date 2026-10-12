@@ -3,7 +3,9 @@ package parser
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rusfort/gocpy/internal/ast"
 	"github.com/rusfort/gocpy/internal/lexer"
@@ -1455,6 +1457,9 @@ func (p *parser) parseFString(t token.Token) *ast.FString {
 			} else if x, err := ParseExpr(exprSrc); err != nil {
 				p.errorf(t.Pos, "in f-string expression {%s}: %v", exprSrc, err)
 			} else {
+				// positions inside the literal: f" is 2 columns, then the text before {expr
+				base := t.Pos.Column + 2 + utf8.RuneCountInString(s[:i+1])
+				shiftPos(reflect.ValueOf(x), t.Pos.File, t.Pos.Line, base-1)
 				fs.Parts = append(fs.Parts, &ast.FStringPart{Expr: x, Spec: spec})
 			}
 			i = j
@@ -1470,4 +1475,36 @@ func (p *parser) parseFString(t token.Token) *ast.FString {
 	}
 	flush()
 	return fs
+}
+
+var posType = reflect.TypeOf(token.Pos{})
+
+// shiftPos moves positions of an f-string expression parsed on its own
+// (line 1, column 1) to its place in the source file.
+func shiftPos(v reflect.Value, file string, line, dcol int) {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if !v.IsNil() {
+			shiftPos(v.Elem(), file, line, dcol)
+		}
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			shiftPos(v.Index(i), file, line, dcol)
+		}
+	case reflect.Struct:
+		if v.Type() == posType {
+			if v.CanSet() {
+				p := v.Interface().(token.Pos)
+				if p.Line == 1 && p.File == "" {
+					v.Set(reflect.ValueOf(token.Pos{File: file, Line: line, Column: p.Column + dcol}))
+				}
+			}
+			return
+		}
+		for i := 0; i < v.NumField(); i++ {
+			if v.Field(i).CanSet() || v.Field(i).Kind() == reflect.Ptr || v.Field(i).Kind() == reflect.Interface || v.Field(i).Kind() == reflect.Slice {
+				shiftPos(v.Field(i), file, line, dcol)
+			}
+		}
+	}
 }

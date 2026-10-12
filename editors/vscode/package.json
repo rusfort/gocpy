@@ -1,23 +1,53 @@
 {
   "name": "gocpy",
   "displayName": "Gocpy",
-  "description": "Gocpy language support: syntax highlighting and file icon for .gocpy files",
-  "version": "0.1.0",
+  "description": "Поддержка языка Gocpy: подсветка как в Gocpy IDE, языковой сервер (переходы, ссылки между пакетами, автодополнение, диагностика), тема Gocpy Dark",
+  "version": "0.2.0",
   "publisher": "rusfort",
   "license": "MIT",
   "icon": "images/icon.png",
-  "galleryBanner": { "color": "#0B1020", "theme": "dark" },
-  "repository": { "type": "git", "url": "https://github.com/rusfort/gocpy" },
+  "galleryBanner": {
+    "color": "#0B1020",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rusfort/gocpy"
+  },
   "homepage": "https://rusfort.github.io/gocpy/",
-  "engines": { "vscode": "^1.64.0" },
-  "categories": ["Programming Languages"],
-  "keywords": ["gocpy", "go", "c", "python", "compiler"],
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Themes",
+    "Snippets",
+    "Linters"
+  ],
+  "keywords": [
+    "gocpy",
+    "go",
+    "c",
+    "python",
+    "compiler",
+    "lsp"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:gocpy",
+    "workspaceContains:**/gocpy.yml"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "gocpy",
-        "aliases": ["Gocpy", "gocpy"],
-        "extensions": [".gocpy"],
+        "aliases": [
+          "Gocpy",
+          "gocpy"
+        ],
+        "extensions": [
+          ".gocpy"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./icons/gocpy-file.svg",
@@ -31,6 +61,349 @@
         "scopeName": "source.gocpy",
         "path": "./syntaxes/gocpy.tmLanguage.json"
       }
-    ]
+    ],
+    "themes": [
+      {
+        "label": "Gocpy Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/gocpy-dark-color-theme.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gocpy",
+        "path": "./snippets/gocpy.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "var",
+        "superType": "variable",
+        "description": "Переменная"
+      },
+      {
+        "id": "field",
+        "superType": "property",
+        "description": "Поле структуры"
+      },
+      {
+        "id": "fieldDecl",
+        "superType": "property",
+        "description": "Объявление поля"
+      },
+      {
+        "id": "label",
+        "superType": "label",
+        "description": "Метка"
+      },
+      {
+        "id": "funcDecl",
+        "superType": "function",
+        "description": "Объявление функции"
+      },
+      {
+        "id": "funcCall",
+        "superType": "function",
+        "description": "Вызов функции"
+      },
+      {
+        "id": "funcMethod",
+        "superType": "method",
+        "description": "Метод"
+      },
+      {
+        "id": "funcBuiltin",
+        "superType": "function",
+        "description": "Встроенная функция"
+      },
+      {
+        "id": "funcStd",
+        "superType": "function",
+        "description": "Функция пакета"
+      },
+      {
+        "id": "funcOperator",
+        "superType": "operator",
+        "description": "Метод-оператор"
+      },
+      {
+        "id": "pkgName",
+        "superType": "namespace",
+        "description": "Имя пакета"
+      },
+      {
+        "id": "pkgDecl",
+        "superType": "namespace",
+        "description": "Объявление пакета"
+      },
+      {
+        "id": "pkgMember",
+        "superType": "variable",
+        "description": "Константа или переменная пакета"
+      },
+      {
+        "id": "constUser",
+        "superType": "variable",
+        "description": "Константа"
+      },
+      {
+        "id": "constBool",
+        "superType": "keyword",
+        "description": "true/false"
+      },
+      {
+        "id": "constNil",
+        "superType": "keyword",
+        "description": "nil"
+      },
+      {
+        "id": "typeBuiltin",
+        "superType": "type",
+        "description": "Встроенный тип"
+      },
+      {
+        "id": "typeError",
+        "superType": "type",
+        "description": "error/Exception"
+      },
+      {
+        "id": "typeUser",
+        "superType": "type",
+        "description": "Пользовательский тип"
+      },
+      {
+        "id": "typeStd",
+        "superType": "type",
+        "description": "Тип стандартной библиотеки"
+      },
+      {
+        "id": "typeParam",
+        "superType": "typeParameter",
+        "description": "Параметр типа"
+      },
+      {
+        "id": "typeConstraint",
+        "superType": "interface",
+        "description": "Ограничение дженерика"
+      },
+      {
+        "id": "unsafeFunc",
+        "superType": "function",
+        "description": "Функция unsafe"
+      },
+      {
+        "id": "unsafeCast",
+        "superType": "type",
+        "description": "Приведение в unsafe"
+      },
+      {
+        "id": "opPtr",
+        "superType": "operator",
+        "description": "Операторы указателей * и &"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "gocpy",
+        "scopes": {
+          "var": [
+            "variable.other.gocpy"
+          ],
+          "field": [
+            "variable.other.property.gocpy"
+          ],
+          "fieldDecl": [
+            "variable.other.property.gocpy"
+          ],
+          "label": [
+            "entity.name.label.gocpy"
+          ],
+          "funcDecl": [
+            "entity.name.function.gocpy"
+          ],
+          "funcCall": [
+            "entity.name.function.call.gocpy"
+          ],
+          "funcMethod": [
+            "entity.name.function.method.gocpy"
+          ],
+          "funcBuiltin": [
+            "support.function.builtin.gocpy"
+          ],
+          "funcStd": [
+            "support.function.gocpy"
+          ],
+          "funcOperator": [
+            "entity.name.function.operator.gocpy"
+          ],
+          "pkgName": [
+            "entity.name.namespace.gocpy"
+          ],
+          "pkgDecl": [
+            "entity.name.namespace.gocpy"
+          ],
+          "pkgMember": [
+            "variable.other.constant.gocpy"
+          ],
+          "constUser": [
+            "variable.other.constant.gocpy"
+          ],
+          "constBool": [
+            "constant.language.boolean.gocpy"
+          ],
+          "constNil": [
+            "constant.language.nil.gocpy"
+          ],
+          "typeBuiltin": [
+            "support.type.builtin.gocpy"
+          ],
+          "typeError": [
+            "support.type.error.gocpy"
+          ],
+          "typeUser": [
+            "entity.name.type.gocpy"
+          ],
+          "typeStd": [
+            "support.type.gocpy"
+          ],
+          "typeParam": [
+            "entity.name.type.parameter.gocpy"
+          ],
+          "typeConstraint": [
+            "support.type.constraint.gocpy"
+          ],
+          "unsafeFunc": [
+            "support.function.unsafe.gocpy"
+          ],
+          "unsafeCast": [
+            "entity.name.type.gocpy"
+          ],
+          "opPtr": [
+            "keyword.operator.pointer.gocpy"
+          ]
+        }
+      }
+    ],
+    "colors": [
+      {
+        "id": "gocpy.unsafeBackground",
+        "description": "Фон блоков unsafe { … }",
+        "defaults": {
+          "dark": "#2d1f22",
+          "light": "#fdecee",
+          "highContrast": "#3a1d22",
+          "highContrastLight": "#fdecee"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Gocpy",
+      "properties": {
+        "gocpy.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Путь к `gocpy`. Если пусто — ищется в `PATH`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/go/bin`."
+        },
+        "gocpy.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Включить языковой сервер (gocpy lsp): переходы, ссылки, автодополнение, диагностика, семантическая подсветка."
+        },
+        "gocpy.unsafeHighlight": {
+          "type": "boolean",
+          "default": true,
+          "description": "Подсвечивать фон блоков unsafe { … }."
+        },
+        "gocpy.suggestTheme": {
+          "type": "boolean",
+          "default": true,
+          "description": "Предложить тему Gocpy Dark при первом открытии файла .gocpy."
+        },
+        "gocpy.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Трассировка обмена с языковым сервером."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "gocpy.restartServer",
+        "title": "Перезапустить языковой сервер",
+        "category": "Gocpy"
+      },
+      {
+        "command": "gocpy.run",
+        "title": "Запустить пакет",
+        "category": "Gocpy",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gocpy.build",
+        "title": "Собрать пакет",
+        "category": "Gocpy"
+      },
+      {
+        "command": "gocpy.check",
+        "title": "Проверить пакет",
+        "category": "Gocpy"
+      },
+      {
+        "command": "gocpy.useTheme",
+        "title": "Включить тему Gocpy Dark",
+        "category": "Gocpy"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "gocpy.run",
+          "when": "resourceLangId == gocpy",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gocpy.run",
+          "when": "editorLangId == gocpy"
+        },
+        {
+          "command": "gocpy.build",
+          "when": "editorLangId == gocpy"
+        },
+        {
+          "command": "gocpy.check",
+          "when": "editorLangId == gocpy"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "[gocpy]": {
+        "editor.semanticHighlighting.enabled": true,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.js --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --minify",
+    "package": "npm run build && vsce package --no-dependencies",
+    "test:grammar": "node test/grammar.js",
+    "test": "npm run build && node test/run.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.24.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }

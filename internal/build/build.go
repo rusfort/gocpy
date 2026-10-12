@@ -41,6 +41,24 @@ type Options struct {
 	EmitC   string    // keep generated C in this directory
 	Verbose bool      // print compiler commands
 	Log     io.Writer // diagnostics (warnings, commands)
+
+	// Language server mode: keep going after errors (partial results) and
+	// read unsaved editor buffers from Overlay (absolute path -> content).
+	Tolerant bool
+	Overlay  map[string][]byte
+	// NoGoBridge skips building the Go bridge (Go packages are left unresolved).
+	NoGoBridge bool
+}
+
+func (o *Options) readFile(p string) ([]byte, error) {
+	if o != nil && o.Overlay != nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			if src, ok := o.Overlay[abs]; ok {
+				return src, nil
+			}
+		}
+	}
+	return os.ReadFile(p)
 }
 
 // Result of a successful build.

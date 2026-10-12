@@ -4,6 +4,7 @@ package types
 import (
 	"fmt"
 	"go/constant"
+	"sort"
 	"strings"
 
 	"github.com/rusfort/gocpy/internal/ast"
@@ -482,6 +483,16 @@ func NewScope(parent *Scope, kind string) *Scope {
 }
 
 func (s *Scope) Lookup(name string) Object { return s.elems[name] }
+
+// Names returns the sorted names declared in the scope.
+func (s *Scope) Names() []string {
+	out := make([]string, 0, len(s.elems))
+	for n := range s.elems {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // LookupParent walks up the scope chain.
 func (s *Scope) LookupParent(name string) (Object, *Scope) {

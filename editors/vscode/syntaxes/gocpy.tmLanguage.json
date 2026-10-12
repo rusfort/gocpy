@@ -2,93 +2,572 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Gocpy",
   "scopeName": "source.gocpy",
-  "fileTypes": ["gocpy"],
+  "fileTypes": [
+    "gocpy"
+  ],
   "patterns": [
-    { "include": "#directive" },
-    { "include": "#comments" },
-    { "include": "#annotations" },
-    { "include": "#strings" },
-    { "include": "#numbers" },
-    { "include": "#keywords" },
-    { "include": "#types" },
-    { "include": "#constants" },
-    { "include": "#functions" },
-    { "include": "#operators" }
+    {
+      "include": "#directive"
+    },
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#package"
+    },
+    {
+      "include": "#imports"
+    },
+    {
+      "include": "#fstring"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#func-decl"
+    },
+    {
+      "include": "#type-decl"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#members"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#invalid"
+    }
   ],
   "repository": {
     "directive": {
-      "match": "//gocpy:[A-Za-z0-9_:.-]+",
-      "name": "keyword.other.directive.gocpy"
+      "match": "//gocpy:.*$",
+      "name": "meta.preprocessor.directive.gocpy"
+    },
+    "todo": {
+      "match": "\\b(TODO|FIXME|XXX|HACK|NOTE)\\b",
+      "name": "keyword.other.todo.gocpy"
     },
     "comments": {
       "patterns": [
-        { "begin": "/\\*", "end": "\\*/", "name": "comment.block.gocpy" },
-        { "match": "//.*$", "name": "comment.line.double-slash.gocpy" }
-      ]
-    },
-    "annotations": {
-      "match": "@[A-Za-z_][A-Za-z0-9_]*",
-      "name": "storage.type.annotation.gocpy"
-    },
-    "strings": {
-      "patterns": [
         {
-          "begin": "f\"",
-          "end": "\"",
-          "name": "string.quoted.double.interpolated.gocpy",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.gocpy",
           "patterns": [
-            { "match": "\\\\.", "name": "constant.character.escape.gocpy" },
             {
-              "begin": "\\{",
-              "end": "\\}",
-              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.gocpy" } },
-              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.gocpy" } },
-              "name": "meta.interpolation.gocpy",
-              "patterns": [{ "include": "$self" }]
+              "include": "#todo"
             }
           ]
         },
         {
-          "begin": "\"",
-          "end": "\"",
-          "name": "string.quoted.double.gocpy",
-          "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.gocpy" }]
+          "begin": "//",
+          "end": "$",
+          "name": "comment.line.double-slash.gocpy",
+          "patterns": [
+            {
+              "include": "#todo"
+            }
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "match": "@throws\\b",
+          "name": "storage.modifier.annotation.throws.gocpy"
         },
-        { "begin": "`", "end": "`", "name": "string.quoted.raw.gocpy" },
-        { "match": "'(\\\\.|[^'\\\\])'", "name": "string.quoted.single.rune.gocpy" }
+        {
+          "match": "@overload\\b",
+          "name": "storage.modifier.annotation.overload.gocpy"
+        },
+        {
+          "match": "@(be_to_le|le_to_be)\\b",
+          "name": "support.function.intrinsic.gocpy"
+        },
+        {
+          "match": "@(inline|noinline|hot|cold|nogc|packed|align|export|target|deprecated|extern)\\b",
+          "name": "storage.modifier.annotation.gocpy"
+        },
+        {
+          "match": "@[\\p{L}_][\\p{L}\\p{N}_]*",
+          "name": "invalid.illegal.annotation.gocpy"
+        }
+      ]
+    },
+    "package": {
+      "match": "\\b(package)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.gocpy"
+        },
+        "2": {
+          "name": "entity.name.namespace.gocpy"
+        }
+      }
+    },
+    "import-path": {
+      "match": "\\\"[^\\\"]*\\\"",
+      "name": "string.quoted.double.import.gocpy"
+    },
+    "imports": {
+      "patterns": [
+        {
+          "begin": "\\b(import)\\s*(\\()",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.import.gocpy"
+            },
+            "2": {
+              "name": "punctuation.bracket.gocpy"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.bracket.gocpy"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#import-path"
+            },
+            {
+              "match": "[\\p{L}_][\\p{L}\\p{N}_]*",
+              "name": "entity.name.namespace.alias.gocpy"
+            }
+          ]
+        },
+        {
+          "match": "\\b(import)\\s+(?:([\\p{L}_][\\p{L}\\p{N}_]*)\\s+)?(\\\"[^\\\"]*\\\")",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.gocpy"
+            },
+            "2": {
+              "name": "entity.name.namespace.alias.gocpy"
+            },
+            "3": {
+              "name": "string.quoted.double.import.gocpy"
+            }
+          }
+        }
+      ]
+    },
+    "escapes": {
+      "match": "\\\\(?:[abfnrtv\\\\'\\\"0]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-7]{3})",
+      "name": "constant.character.escape.gocpy"
+    },
+    "fstring": {
+      "begin": "\\bf\\\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.gocpy"
+        }
+      },
+      "end": "\\\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.gocpy"
+        }
+      },
+      "name": "string.interpolated.gocpy",
+      "patterns": [
+        {
+          "include": "#escapes"
+        },
+        {
+          "match": "\\{\\{|\\}\\}",
+          "name": "constant.character.escape.brace.gocpy"
+        },
+        {
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.gocpy"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.gocpy"
+            }
+          },
+          "contentName": "meta.embedded.expression.gocpy",
+          "patterns": [
+            {
+              "match": ":[^{}\\\"():]*(?=\\})",
+              "name": "constant.other.format-spec.gocpy"
+            },
+            {
+              "include": "#interp-inner"
+            }
+          ]
+        }
+      ]
+    },
+    "interp-inner": {
+      "patterns": [
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#numbers"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#constants"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#calls"
+        },
+        {
+          "include": "#members"
+        },
+        {
+          "include": "#operators"
+        },
+        {
+          "include": "#interp-punct"
+        },
+        {
+          "include": "#identifiers"
+        }
+      ]
+    },
+    "interp-punct": {
+      "patterns": [
+        {
+          "match": "[()\\[\\]]",
+          "name": "punctuation.bracket.gocpy"
+        },
+        {
+          "match": "[,.]",
+          "name": "punctuation.separator.gocpy"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "begin": "\\\"",
+          "end": "\\\"",
+          "name": "string.quoted.double.gocpy",
+          "patterns": [
+            {
+              "include": "#escapes"
+            }
+          ]
+        },
+        {
+          "begin": "`",
+          "end": "`",
+          "name": "string.quoted.raw.gocpy"
+        },
+        {
+          "match": "'(?:\\\\[^']+|[^'\\\\])'",
+          "name": "string.quoted.single.char.gocpy",
+          "captures": {
+            "0": {
+              "patterns": [
+                {
+                  "include": "#escapes"
+                }
+              ]
+            }
+          }
+        }
       ]
     },
     "numbers": {
-      "match": "\\b(0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9]+)?)\\b",
-      "name": "constant.numeric.gocpy"
+      "patterns": [
+        {
+          "match": "\\b0[xX][0-9A-Fa-f_]+\\b|\\b0[bB][01_]+\\b|\\b0[oO][0-7_]+\\b",
+          "name": "constant.numeric.radix.gocpy"
+        },
+        {
+          "match": "\\b\\d[\\d_]*\\.\\d[\\d_]*(?:[eE][+-]?\\d+)?\\b|\\b\\d[\\d_]*[eE][+-]?\\d+\\b|(?<![\\w.])\\.\\d[\\d_]*\\b",
+          "name": "constant.numeric.float.gocpy"
+        },
+        {
+          "match": "\\b\\d[\\d_]*\\b",
+          "name": "constant.numeric.integer.gocpy"
+        }
+      ]
+    },
+    "func-decl": {
+      "patterns": [
+        {
+          "match": "\\b(func)\\s*(\\()([^()]*)(\\))\\s*([+\\-*/%&|^<>=!\\[\\]~]+)\\s*(?=\\()",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.gocpy"
+            },
+            "2": {
+              "name": "punctuation.bracket.gocpy"
+            },
+            "3": {
+              "patterns": [
+                {
+                  "include": "#operators"
+                },
+                {
+                  "include": "#punctuation"
+                },
+                {
+                  "include": "#types"
+                },
+                {
+                  "include": "#identifiers"
+                }
+              ]
+            },
+            "4": {
+              "name": "punctuation.bracket.gocpy"
+            },
+            "5": {
+              "name": "entity.name.function.operator.gocpy"
+            }
+          }
+        },
+        {
+          "match": "\\b(func)\\s*(\\()([^()]*)(\\))\\s*([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.gocpy"
+            },
+            "2": {
+              "name": "punctuation.bracket.gocpy"
+            },
+            "3": {
+              "patterns": [
+                {
+                  "include": "#operators"
+                },
+                {
+                  "include": "#punctuation"
+                },
+                {
+                  "include": "#types"
+                },
+                {
+                  "include": "#identifiers"
+                }
+              ]
+            },
+            "4": {
+              "name": "punctuation.bracket.gocpy"
+            },
+            "5": {
+              "name": "entity.name.function.gocpy"
+            }
+          }
+        },
+        {
+          "match": "\\b(func)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.gocpy"
+            },
+            "2": {
+              "name": "entity.name.function.gocpy"
+            }
+          }
+        }
+      ]
+    },
+    "type-decl": {
+      "match": "\\b(type)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.type.gocpy"
+        },
+        "2": {
+          "name": "entity.name.type.gocpy"
+        }
+      }
     },
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(if|else|for|in|switch|case|default|fallthrough|break|continue|return|select|go|defer|try|catch|finally|throw)\\b",
-          "name": "keyword.control.gocpy"
+          "match": "\\b(if|else|for|switch|case|default|break|continue|fallthrough|return)\\b",
+          "name": "keyword.control.flow.gocpy"
         },
         {
-          "match": "\\b(package|import|func|var|const|type|struct|interface|map|chan|unsafe)\\b",
-          "name": "keyword.other.gocpy"
+          "match": "\\b(func|var|const)\\b",
+          "name": "keyword.declaration.gocpy"
+        },
+        {
+          "match": "\\btype\\b",
+          "name": "keyword.declaration.type.gocpy"
+        },
+        {
+          "match": "\\b(struct|interface|map|chan)\\b",
+          "name": "keyword.other.typedef.gocpy"
+        },
+        {
+          "match": "\\b(package|import)\\b",
+          "name": "keyword.control.import.gocpy"
+        },
+        {
+          "match": "\\bin\\b",
+          "name": "keyword.control.in.gocpy"
+        },
+        {
+          "match": "\\b(go|defer|select)\\b",
+          "name": "keyword.control.concurrency.gocpy"
+        },
+        {
+          "match": "\\b(try|catch|finally|throw)\\b",
+          "name": "keyword.control.exception.gocpy"
+        },
+        {
+          "match": "\\bunsafe\\b",
+          "name": "keyword.other.unsafe.gocpy"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.gocpy"
+        },
+        {
+          "match": "\\bnil\\b",
+          "name": "constant.language.nil.gocpy"
+        },
+        {
+          "match": "\\biota\\b",
+          "name": "constant.language.iota.gocpy"
         }
       ]
     },
     "types": {
-      "match": "\\b(bool|string|byte|rune|any|error|uintptr|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|float32|float64|comparable)\\b",
-      "name": "storage.type.gocpy"
+      "patterns": [
+        {
+          "match": "\\b(bool|int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|uintptr|float32|float64|string|byte|rune|any|thread)\\b",
+          "name": "support.type.builtin.gocpy"
+        },
+        {
+          "match": "\\b(error|Exception)\\b",
+          "name": "support.type.error.gocpy"
+        },
+        {
+          "match": "\\bcomparable\\b",
+          "name": "support.type.constraint.gocpy"
+        }
+      ]
     },
-    "constants": {
-      "match": "\\b(true|false|nil|iota)\\b",
-      "name": "constant.language.gocpy"
+    "calls": {
+      "patterns": [
+        {
+          "match": "\\b(len|cap|append|make|new|sizeof|close|delete)\\b(?=\\s*\\()",
+          "name": "support.function.builtin.gocpy"
+        },
+        {
+          "match": "\\b(malloc|calloc|realloc|free|memcpy|memset)\\b(?=\\s*\\()",
+          "name": "support.function.unsafe.gocpy"
+        },
+        {
+          "match": "(?<=\\.)[\\p{L}_][\\p{L}\\p{N}_]*(?=\\s*\\()",
+          "name": "entity.name.function.method.gocpy"
+        },
+        {
+          "match": "(?<![\\w.])[\\p{L}_][\\p{L}\\p{N}_]*(?=\\s*\\()",
+          "name": "entity.name.function.call.gocpy"
+        }
+      ]
     },
-    "functions": {
-      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
-      "captures": { "1": { "name": "entity.name.function.gocpy" } }
+    "members": {
+      "match": "(?<=\\.)[\\p{L}_][\\p{L}\\p{N}_]*",
+      "name": "variable.other.property.gocpy"
     },
     "operators": {
-      "match": ":=|\\.\\.\\.|&&|\\|\\||<-|[+\\-*/%&|^<>=!?~]=?",
-      "name": "keyword.operator.gocpy"
+      "patterns": [
+        {
+          "match": "<-",
+          "name": "keyword.operator.channel.gocpy"
+        },
+        {
+          "match": "\\?",
+          "name": "keyword.operator.propagate.gocpy"
+        },
+        {
+          "match": "\\.\\.\\.",
+          "name": "keyword.operator.ellipsis.gocpy"
+        },
+        {
+          "match": ":=|<<=|>>=|&\\^=|[+\\-*/%&|^]=|=(?!=)",
+          "name": "keyword.operator.assignment.gocpy"
+        },
+        {
+          "match": "&&|\\|\\||!(?!=)",
+          "name": "keyword.operator.logical.gocpy"
+        },
+        {
+          "match": "==|!=|<=|>=|<|>",
+          "name": "keyword.operator.comparison.gocpy"
+        },
+        {
+          "match": "\\+\\+|--|<<|>>|&\\^|[+\\-*/%&|^~]",
+          "name": "keyword.operator.arithmetic.gocpy"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}()\\[\\]]",
+          "name": "punctuation.bracket.gocpy"
+        },
+        {
+          "match": "[,;:.]",
+          "name": "punctuation.separator.gocpy"
+        }
+      ]
+    },
+    "identifiers": {
+      "match": "[\\p{L}_][\\p{L}\\p{N}_]*",
+      "name": "variable.other.gocpy"
+    },
+    "invalid": {
+      "match": "[$#\\\\]",
+      "name": "invalid.illegal.character.gocpy"
     }
   }
 }

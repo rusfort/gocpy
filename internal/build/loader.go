@@ -53,6 +53,18 @@ type Program struct {
 	Bridge   *gobridge.Result
 	fileUnit map[string]*unit
 	demangle func(string) string
+	// Qual maps identifiers that replaced pkg.Name selectors to the original
+	// selector parts (used by the language server).
+	Qual map[*ast.Ident]*QualRef
+	// Errors collected in tolerant mode ("file:line:col: msg").
+	Errors []string
+}
+
+// QualRef is the original form of a qualified identifier pkg.Name.
+type QualRef struct {
+	Pkg  *ast.Ident // package name as written
+	Sel  *ast.Ident // member name as written
+	Path string     // import path
 }
 
 // Demangle rewrites prefixed names in a message back to pkg.Name.
@@ -74,6 +86,7 @@ type loader struct {
 	order    []*unit
 	goPkgs   map[string][]token.Pos
 	errs     []string
+	qual     map[*ast.Ident]*QualRef
 }
 
 func (l *loader) errorf(p token.Pos, f string, a ...any) {
@@ -85,22 +98,34 @@ func (l *loader) errorf(p token.Pos, f string, a ...any) {
 }
 
 func parsePackage(paths []string) ([]*ast.File, error) {
-	var files []*ast.File
+	files, err, _ := parsePackageOpts(paths, nil)
+	return files, err
+}
+
+// parsePackageOpts parses a package. In tolerant mode it also returns the
+// (possibly partial) files when there are syntax errors.
+func parsePackageOpts(paths []string, opts *Options) ([]*ast.File, error, []*ast.File) {
+	var files, partial []*ast.File
 	var errs []string
+	tolerant := opts != nil && opts.Tolerant
 	for _, p := range paths {
-		src, err := os.ReadFile(p)
+		src, err := opts.readFile(p)
 		if err != nil {
-			return nil, err
+			return nil, err, nil
 		}
-		f, err := parser.ParseFile(p, src)
+		f, err := safeParse(p, src)
 		if err != nil {
 			errs = append(errs, err.Error())
+			if tolerant && f != nil {
+				partial = append(partial, f)
+			}
 			continue
 		}
 		files = append(files, f)
+		partial = append(partial, f)
 	}
 	if len(errs) > 0 {
-		return nil, errors.New(strings.Join(errs, "\n"))
+		return nil, errors.New(strings.Join(errs, "\n")), partial
 	}
 	for _, f := range files[1:] {
 		if f.Name.Name != files[0].Name.Name {
@@ -109,9 +134,22 @@ func parsePackage(paths []string) ([]*ast.File, error) {
 		}
 	}
 	if len(errs) > 0 {
-		return nil, errors.New(strings.Join(errs, "\n"))
+		return nil, errors.New(strings.Join(errs, "\n")), partial
 	}
-	return files, nil
+	return files, nil, files
+}
+
+func safeParse(p string, src []byte) (f *ast.File, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			f, err = nil, fmt.Errorf("%s:1:1: internal parser error: %v", p, r)
+		}
+	}()
+	f, err = parser.ParseFile(p, src)
+	if f != nil && f.Name == nil {
+		f = nil
+	}
+	return f, err
 }
 
 // Load parses the target package and everything it imports.
@@ -127,12 +165,17 @@ func Load(target string, opts *Options) (*Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	files, err := parsePackage(paths)
+	files, err, partial := parsePackageOpts(paths, opts)
+	var parseErrs []string
 	if err != nil {
-		return nil, err
+		if !opts.Tolerant || len(partial) == 0 {
+			return nil, err
+		}
+		parseErrs = append(parseErrs, err.Error())
+		files = partial
 	}
 	l := &loader{opts: opts, root: root, cfg: cfg, units: map[string]*unit{}, state: map[string]int{},
-		goPkgs: map[string][]token.Pos{}}
+		goPkgs: map[string][]token.Pos{}, qual: map[*ast.Ident]*QualRef{}, errs: parseErrs}
 	absDir, _ := filepath.Abs(dir)
 	rel, _ := filepath.Rel(root, absDir)
 	modPath := cfg.Module
@@ -149,14 +192,18 @@ func Load(target string, opts *Options) (*Program, error) {
 	t := &unit{path: tpath, dir: absDir, name: files[0].Name.Name, files: files, modPath: modPath, modRoot: root, target: true}
 	l.units[tpath] = t
 	l.visit(t)
-	if len(l.errs) > 0 {
+	if len(l.errs) > 0 && !opts.Tolerant {
 		return nil, errors.New(strings.Join(l.errs, "\n"))
 	}
 
-	prog := &Program{Root: root, Config: cfg, Target: target, Graph: l.graph}
+	prog := &Program{Root: root, Config: cfg, Target: target, Graph: l.graph, Qual: l.qual}
 	// Go packages through the bridge
 	var goUnits []*unit
-	if len(l.goPkgs) > 0 {
+	if len(l.goPkgs) > 0 && opts.NoGoBridge {
+		for p := range l.goPkgs {
+			delete(l.units, p)
+		}
+	} else if len(l.goPkgs) > 0 {
 		req := gobridge.Request{Root: root, Requires: l.graph.Go, Replace: map[string]string{},
 			CC: cfg.Build.CC, Sum: l.graph.Sum, Log: opts.Log}
 		if req.CC == "" {
@@ -173,16 +220,30 @@ func Load(target string, opts *Options) (*Program, error) {
 		sort.Strings(req.Packages)
 		res, err := gobridge.Build(req)
 		if err != nil {
-			return nil, err
+			if !opts.Tolerant {
+				return nil, err
+			}
+			for p, ps := range l.goPkgs {
+				for _, pos := range ps {
+					l.errorf(pos, "Go package %s: %v", p, err)
+				}
+				delete(l.units, p)
+			}
+			req.Packages = nil
+		} else {
+			if err := l.graph.WriteSum(); err != nil && !opts.Tolerant {
+				return nil, err
+			}
+			prog.Bridge = res
 		}
-		if err := l.graph.WriteSum(); err != nil {
-			return nil, err
-		}
-		prog.Bridge = res
 		for _, p := range req.Packages {
 			bp := res.Packages[p]
 			fs, err := parsePackage([]string{bp.Stub})
 			if err != nil {
+				if opts.Tolerant {
+					delete(l.units, p)
+					continue
+				}
 				return nil, fmt.Errorf("go bridge for %q: %v", p, err)
 			}
 			u := l.units[p]
@@ -190,7 +251,7 @@ func Load(target string, opts *Options) (*Program, error) {
 			goUnits = append(goUnits, u)
 		}
 	} else if l.graph != nil {
-		if err := l.graph.WriteSum(); err != nil {
+		if err := l.graph.WriteSum(); err != nil && !opts.Tolerant {
 			return nil, err
 		}
 	}
@@ -245,9 +306,13 @@ func Load(target string, opts *Options) (*Program, error) {
 			l.rewriteFile(u, f)
 		}
 	}
-	if len(l.errs) > 0 {
+	if len(l.errs) > 0 && !opts.Tolerant {
 		return nil, errors.New(prog.Demangle(strings.Join(l.errs, "\n")))
 	}
+	for i, e := range l.errs {
+		l.errs[i] = prog.Demangle(e)
+	}
+	prog.Errors = l.errs
 	for _, u := range all {
 		for _, f := range u.files {
 			f.Name = &ast.Ident{NamePos: f.Name.NamePos, Name: t.name}
@@ -259,8 +324,14 @@ func Load(target string, opts *Options) (*Program, error) {
 }
 
 func (l *loader) needGraph() error {
-	if l.graph != nil || l.graphErr != nil {
-		return l.graphErr
+	if l.graphErr != nil {
+		if l.opts.Tolerant {
+			l.errs = append(l.errs, l.graphErr.Error())
+		}
+		return errReported
+	}
+	if l.graph != nil {
+		return nil
 	}
 	g, err := mod.Resolve(l.root, l.cfg, l.opts.logf)
 	if err != nil {
@@ -283,7 +354,12 @@ func (l *loader) visit(u *unit) {
 			}
 			dep, err := l.resolve(u, p, imp.Pos())
 			if err == errReported {
-				return
+				if !l.opts.Tolerant {
+					return
+				}
+				l.errs = l.errs[:len(l.errs)-1] // positioned at the import instead
+				l.errorf(imp.Pos(), "%v", l.graphErr)
+				continue
 			}
 			if err != nil {
 				l.errorf(imp.Pos(), "%v", err)
@@ -348,9 +424,13 @@ func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 		}
 		return nil, fmt.Errorf("package %q: %v", p, err)
 	}
-	files, err := parsePackage(paths)
+	files, err, partial := parsePackageOpts(paths, l.opts)
 	if err != nil {
-		return nil, err
+		if !l.opts.Tolerant || len(partial) == 0 {
+			return nil, err
+		}
+		l.errs = append(l.errs, err.Error())
+		files = partial
 	}
 	if files[0].Name.Name == "main" {
 		return nil, fmt.Errorf("import %q: it is a program (package main), not an importable package", p)
@@ -513,7 +593,9 @@ func (rw *fileRW) qualified(s *ast.SelectorExpr) (*ast.Ident, bool) {
 	case !exported(name):
 		rw.l.errorf(s.Sel.Pos(), "cannot refer to unexported name %s.%s", x.Name, name)
 	}
-	return &ast.Ident{NamePos: x.NamePos, Name: dep.prefix + name}, true
+	id := &ast.Ident{NamePos: x.NamePos, Name: dep.prefix + name}
+	rw.l.qual[id] = &QualRef{Pkg: x, Sel: s.Sel, Path: dep.path}
+	return id, true
 }
 
 func (rw *fileRW) walk(v reflect.Value, ctx walkCtx) {

@@ -32,12 +32,28 @@ type fn struct {
 	Params  []string `json:"params"`
 	Results []string `json:"results"`
 	Error   bool     `json:"error"`
+	Names   []string `json:"names"` // Go parameter names
+	Pos     string   `json:"pos"`   // file:line:col of the Go declaration
 }
 
 type cst struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"`
 	Value string `json:"value"`
+	Pos   string `json:"pos"`
+}
+
+var fset = token.NewFileSet()
+
+func posOf(p token.Pos) string {
+	if !p.IsValid() {
+		return ""
+	}
+	pp := fset.Position(p)
+	if pp.Filename == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d:%d", pp.Filename, pp.Line, pp.Column)
 }
 
 type pkgOut struct {
@@ -161,7 +177,6 @@ func main() {
 	if len(errs) > 0 {
 		fail("%s", strings.Join(errs, "\n"))
 	}
-	fset := token.NewFileSet()
 	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
 		f := exports[path]
 		if f == "" {
@@ -276,8 +291,9 @@ func (g *gen) function(pkg *types.Package, obj *types.Func) (fn, string) {
 	if sig.Variadic() {
 		return fn{}, "variadic Go functions are not supported by the bridge yet"
 	}
-	f := fn{Name: obj.Name()}
+	f := fn{Name: obj.Name(), Pos: posOf(obj.Pos())}
 	for i := 0; i < sig.Params().Len(); i++ {
+		f.Names = append(f.Names, sig.Params().At(i).Name())
 		t := sig.Params().At(i).Type()
 		gt, ok := gocpyType(t)
 		if !ok {
@@ -359,7 +375,7 @@ func (g *gen) function(pkg *types.Package, obj *types.Func) (fn, string) {
 }
 
 func constDecl(obj *types.Const) (cst, string) {
-	c := cst{Name: obj.Name()}
+	c := cst{Name: obj.Name(), Pos: posOf(obj.Pos())}
 	t := obj.Type()
 	b, ok := t.Underlying().(*types.Basic)
 	if !ok {

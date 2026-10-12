@@ -55,8 +55,6 @@ gocpy run examples/stage2
 - Ошибки рантайма как в Go: `send on closed channel`, `close of closed channel`, `all goroutines are asleep - deadlock!` (код 2).
 - Реализация MVP: горутина = поток pthread (зарегистрирован в Boehm GC), исключения — на поток; каналы/WaitGroup/Mutex используют одну блокировку рантайма. Проверено ThreadSanitizer и ASan.
 
-Ещё не поддерживается: unsafe/malloc (этап 5), defer, дженерики, интерфейсы, `any`, map, замыкания (в том числе `go func(){...}()`), `.go` файлы в модуле.
-
 ## Замыкания, defer, map, интерфейсы
 
 - Функциональные значения `func(...)`, литералы функций и замыкания. Захваченные переменные переносятся в кучу, поэтому замыкание видит последующие изменения.
@@ -142,6 +140,14 @@ require:
 
 ## Установка
 
-Готовые бинарники для linux/darwin (amd64, arm64) выкладываются в GitHub Releases. Варианты установки: `brew install --cask rusfort/tap/gocpy`, `curl -fsSL .../install.sh | sh`, пакеты `.deb`, `.rpm`, `.apk` или `go install`. 
+Готовые бинарники для linux/darwin (amd64, arm64) выкладываются в GitHub Releases. 
+
+Варианты установки: 
+
+`brew install --cask rusfort/tap/gocpy`, 
+
+`curl -fsSL .../install.sh | sh`, 
+
+пакеты `.deb`, `.rpm`, `.apk` или `go install`. 
 
 Для сборки программ нужны gcc или clang и libgc. Для `require.gocpy` нужен git, для `require.go` — Go 1.21+. Проверка окружения: `gocpy doctor`.

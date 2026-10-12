@@ -13,6 +13,8 @@
   <a href="https://github.com/rusfort/gocpy/actions/workflows/ci.yml"><img src="https://github.com/rusfort/gocpy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/rusfort/gocpy/releases/latest"><img src="https://img.shields.io/github/v/release/rusfort/gocpy" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="https://pkg.go.dev/github.com/rusfort/gocpy"><img src="https://img.shields.io/static/v1?label=godev&message=reference&color=00add8" alt="godev"></a>
+  <a href="https://t.me/rusfort"><img src="https://img.shields.io/static/v1?label=telegram&message=rusfort&color=00add8" alt="Telegram"></a>
 </p>
 
 <p align="center">

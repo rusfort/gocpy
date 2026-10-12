@@ -1,5 +1,5 @@
 #!/bin/sh
-# curl -fsSL https://raw.githubusercontent.com/rusfort/gocpy/main/install.sh | sh
+# curl -fsSL https://raw.githubusercontent.com/rusfort/gocpy/HEAD/install.sh | sh
 # Env: GOCPY_VERSION (default: latest), GOCPY_PREFIX (default: /usr/local/bin or ~/.local/bin)
 set -eu
 REPO="rusfort/gocpy"

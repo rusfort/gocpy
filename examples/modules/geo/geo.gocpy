@@ -1,0 +1,27 @@
+package geo
+
+// Point is exported; its tag field is visible only inside package geo.
+type Point struct {
+    X int
+    Y int
+    tag string
+}
+
+func New(x int, y int) Point {
+    return Point{X: x, Y: y, tag: label(x, y)}
+}
+
+func label(x int, y int) string {
+    return f"({x},{y})"
+}
+
+func (p Point) String() string {
+    return p.tag
+}
+
+func Max[T int | float64](a T, b T) T {
+    if a > b {
+        return a
+    }
+    return b
+}

@@ -118,8 +118,30 @@ gocpy run examples/stage2
 - `@be_to_le(x)` и `@le_to_be(x)` разворачивают порядок байт целых, float, массивов и структур из них, включая `@packed`. Эти интринсики работают и вне `unsafe`.
 - Рантайм завершает программу с кодом 2 при OOM, отрицательном размере и `free`/`realloc` GC-памяти (при `gc: boehm`). Двойной `free` и use-after-free остаются UB, как в C; ловите их через ASan.
 
+## Модули и зависимости (0.2.0)
+
+Импорты работают как в Go, а версии задаются в `gocpy.yml` в двух разделах: `gocpy` и `go`.
+
+```yaml
+module: github.com/rusfort/gocpy-first-app
+version: 0.1.0
+require:
+  gocpy:
+    - github.com/john/gocpy-repo@v0.1.0
+  go:
+    - github.com/bob/go-repo@v0.2.0
+```
+
+- Пакеты своего модуля импортируются по пути модуля: `github.com/rusfort/gocpy-first-app/util`.
+- Gocpy-модули загружаются через git по тегу. Версии выбираются по MVS, хеши фиксируются в `gocpy.sum`.
+- Go-модули подключаются через мост `go build -buildmode=c-archive`. Поддерживаются функции и константы с числовыми типами, `bool`, `string`, `[]byte` и результатом `error`.
+- Между пакетами работают типы, методы, дженерики, интерфейсы и исключения. Неэкспортированные имена, поля и методы снаружи недоступны.
+- Команды: `gocpy init`, `gocpy get`, `gocpy mod download|verify|graph`.
+
+Подробности — в [`docs/MODULES.md`](docs/MODULES.md), пример — в `examples/modules`.
+
 ## Установка
 
 Готовые бинарники для linux/darwin (amd64, arm64) выкладываются в GitHub Releases. Варианты установки: `brew install --cask rusfort/tap/gocpy`, `curl -fsSL .../install.sh | sh`, пакеты `.deb`, `.rpm`, `.apk` или `go install`. 
 
-Для сборки программ нужны gcc или clang и libgc. Проверка окружения: `gocpy doctor`.
+Для сборки программ нужны gcc или clang и libgc. Для `require.gocpy` нужен git, для `require.go` — Go 1.21+. Проверка окружения: `gocpy doctor`.

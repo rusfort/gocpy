@@ -71,5 +71,16 @@ func Doctor(logf func(string, ...any)) error {
 		return fmt.Errorf("libgc test program failed: %v\n%s", err, out)
 	}
 	logf("libgc: ok (%s)\n", strings.Join(append(cf, lf...), " "))
+	if g, err := exec.LookPath("go"); err == nil {
+		v, _ := exec.Command(g, "env", "GOVERSION").Output()
+		logf("Go toolchain: %s (%s) — require.go is available\n", g, strings.TrimSpace(string(v)))
+	} else {
+		logf("Go toolchain: not found (optional; needed only for require.go in gocpy.yml)\n")
+	}
+	if _, err := exec.LookPath("git"); err == nil {
+		logf("git: ok (downloads require.gocpy modules)\n")
+	} else {
+		logf("git: not found (needed to download require.gocpy modules)\n")
+	}
 	return nil
 }

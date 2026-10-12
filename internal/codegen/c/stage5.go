@@ -325,7 +325,11 @@ func (g *gen) typeName(t types.Type) string {
 		if t.Pkg != "" {
 			return t.Pkg + "." + t.Obj.Name()
 		}
-		return g.pkg.Name + "." + t.String()
+		s := t.String()
+		if i := strings.IndexByte(s, '['); i >= 0 && strings.Contains(s[:i], ".") || i < 0 && strings.Contains(s, ".") {
+			return s // declared in an imported package
+		}
+		return g.pkg.Name + "." + s
 	case *types.Pointer:
 		return "*" + g.typeName(t.Elem)
 	case *types.Slice:

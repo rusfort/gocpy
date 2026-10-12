@@ -1,0 +1,11 @@
+module: github.com/rusfort/gocpy/examples/modules
+version: 0.1.0
+build:
+  opt: 2
+  gc: boehm
+require:
+  # Gocpy modules (source, fetched with git by tag):
+  # gocpy:
+  #   - github.com/john/gocpy-repo@v0.1.0
+  go:
+    - github.com/google/uuid@v1.6.0

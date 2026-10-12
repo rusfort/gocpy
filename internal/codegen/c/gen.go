@@ -134,7 +134,11 @@ func Generate(pkg *types.Package, info *types.Info) (*Output, error) {
 				g.funcDef(body, fn, false)
 			}
 		}
-		name := strings.TrimSuffix(filepath.Base(src), ".gocpy") + ".c"
+		base := strings.TrimSuffix(filepath.Base(src), ".gocpy")
+		name := base + ".c"
+		for n := 2; out.Files[name] != "" || name == "gocpy_support.c" || name == "gocpy_main.c" || name == "gocpy_rt.c"; n++ {
+			name = fmt.Sprintf("%s_%d.c", base, n) // same file name in several packages
+		}
 		out.Files[name] = body.String()
 		out.Units = append(out.Units, Unit{CFile: name, Source: src})
 	}

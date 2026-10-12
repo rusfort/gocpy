@@ -16,34 +16,16 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rusfort/gocpy/internal/ast"
+	"github.com/rusfort/gocpy/internal/mod"
+
 	"github.com/rusfort/gocpy/internal/check"
 	cgen "github.com/rusfort/gocpy/internal/codegen/c"
-	"github.com/rusfort/gocpy/internal/parser"
 	"github.com/rusfort/gocpy/internal/types"
 	rt "github.com/rusfort/gocpy/runtime"
 )
 
 // ModuleConfig is gocpy.yml.
-type ModuleConfig struct {
-	Module  string `yaml:"module"`
-	Version string `yaml:"version"`
-	Gocpy   string `yaml:"gocpy"`
-	Build   struct {
-		Targets []string `yaml:"targets"`
-		CC      string   `yaml:"cc"`
-		Opt     *int     `yaml:"opt"`
-		GC      string   `yaml:"gc"` // boehm | none
-		Flags   []string `yaml:"flags"`
-	} `yaml:"build"`
-	Native struct {
-		C       []string `yaml:"c"`
-		Include []string `yaml:"include"`
-		Link    []string `yaml:"link"`
-		Go      []string `yaml:"go"`
-	} `yaml:"native"`
-	Require map[string]string `yaml:"require"`
-}
+type ModuleConfig = mod.Config
 
 // FileConfig is <file>.yml next to <file>.gocpy.
 type FileConfig struct {
@@ -82,9 +64,9 @@ func findModule(dir string) (root string, cfg *ModuleConfig, err error) {
 	for d := abs; ; d = filepath.Dir(d) {
 		p := filepath.Join(d, "gocpy.yml")
 		if data, err := os.ReadFile(p); err == nil {
-			cfg = &ModuleConfig{}
-			if err := yaml.Unmarshal(data, cfg); err != nil {
-				return "", nil, fmt.Errorf("%s: %v", p, err)
+			cfg, err = mod.ParseConfig(p, data)
+			if err != nil {
+				return "", nil, err
 			}
 			return d, cfg, nil
 		}
@@ -122,47 +104,34 @@ func Sources(target string) (dir string, files []string, err error) {
 	return target, files, nil
 }
 
-// Frontend parses and checks a package; returns typed package or diagnostics.
-func Frontend(paths []string) (*types.Package, *types.Info, []string, error) {
-	var files []*ast.File
-	var errs []string
-	for _, p := range paths {
-		src, err := os.ReadFile(p)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		f, err := parser.ParseFile(p, src)
-		if err != nil {
-			errs = append(errs, err.Error())
-			continue
-		}
-		files = append(files, f)
+// Frontend loads the target package with its imports, merges them into one
+// program and type-checks it.
+func Frontend(target string, opts *Options) (*Program, *types.Package, *types.Info, []string, error) {
+	prog, err := Load(target, opts)
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
-	if len(errs) > 0 {
-		return nil, nil, nil, errors.New(strings.Join(errs, "\n"))
-	}
-	for _, f := range files[1:] {
-		if f.Name.Name != files[0].Name.Name {
-			errs = append(errs, fmt.Sprintf("%s: package %s, expected %s (one package per directory)",
-				f.Package, f.Name.Name, files[0].Name.Name))
-		}
-	}
-	var warnings []string
+	types.Demangle = prog.Demangle
+	files := prog.Files
+	var errs, warnings []string
 	for _, d := range check.Package(files) {
 		if d.Severity == check.Warning {
-			warnings = append(warnings, d.String())
+			warnings = append(warnings, prog.Demangle(d.String()))
 		} else {
-			errs = append(errs, d.String())
+			errs = append(errs, prog.Demangle(d.String()))
 		}
 	}
 	if len(errs) > 0 {
-		return nil, nil, warnings, errors.New(strings.Join(errs, "\n"))
+		return prog, nil, nil, warnings, errors.New(strings.Join(errs, "\n"))
 	}
 	pkg, info, err := types.Check(files)
 	if err != nil {
-		return nil, nil, warnings, err
+		return prog, nil, nil, warnings, errors.New(prog.Demangle(err.Error()))
 	}
-	return pkg, info, warnings, nil
+	if errs := prog.checkCrossAccess(info); len(errs) > 0 {
+		return prog, nil, nil, warnings, errors.New(strings.Join(errs, "\n"))
+	}
+	return prog, pkg, info, warnings, nil
 }
 
 // Build compiles the package at target (directory or single file).
@@ -171,17 +140,14 @@ func Build(target string, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	root, mod, err := findModule(dir)
-	if err != nil {
-		return nil, err
-	}
-	pkg, info, warnings, err := Frontend(paths)
+	prog, pkg, info, warnings, err := Frontend(target, &opts)
 	for _, w := range warnings {
 		opts.logf("%s\n", w)
 	}
 	if err != nil {
 		return nil, err
 	}
+	root, mod := prog.Root, prog.Config
 	if pkg.Name != "main" {
 		return nil, fmt.Errorf("%s: package %s is not a command (package main required for build)", target, pkg.Name)
 	}
@@ -253,16 +219,38 @@ func Build(target string, opts Options) (*Result, error) {
 		base = append(base, "-DGOCPY_GC_BOEHM")
 		base = append(base, gcC...)
 	}
-	for _, inc := range mod.Native.Include {
-		base = append(base, "-I", filepath.Join(root, inc))
+	// native code of the main module and of every Gocpy module the program uses
+	type native struct {
+		root string
+		cfg  *ModuleConfig
+	}
+	natives := []native{{root, mod}}
+	seenRoot := map[string]bool{root: true}
+	if prog.Graph != nil {
+		for _, u := range prog.Units {
+			if u.isGo || seenRoot[u.modRoot] {
+				continue
+			}
+			seenRoot[u.modRoot] = true
+			for _, m := range prog.Graph.Gocpy {
+				if m.Dir == u.modRoot {
+					natives = append(natives, native{m.Dir, m.Config})
+				}
+			}
+		}
+	}
+	for _, n := range natives {
+		for _, inc := range n.cfg.Native.Include {
+			base = append(base, "-I", filepath.Join(n.root, inc))
+		}
 	}
 	base = append(base, mod.Build.Flags...)
 
-	type unit struct {
+	type cunit struct {
 		src   string
 		flags []string
 	}
-	units := []unit{{src: filepath.Join(work, "gocpy_rt.c"), flags: []string{fmt.Sprintf("-O%d", opt)}}}
+	units := []cunit{{src: filepath.Join(work, "gocpy_rt.c"), flags: []string{fmt.Sprintf("-O%d", opt)}}}
 	for _, u := range out.Units {
 		fl := []string{fmt.Sprintf("-O%d", opt)}
 		if u.Source != "" {
@@ -280,16 +268,21 @@ func Build(target string, opts Options) (*Result, error) {
 				}
 			}
 		}
-		units = append(units, unit{src: filepath.Join(work, u.CFile), flags: fl})
+		units = append(units, cunit{src: filepath.Join(work, u.CFile), flags: fl})
 	}
-	for _, pattern := range mod.Native.C {
-		matches, err := filepath.Glob(filepath.Join(root, pattern))
-		if err != nil {
-			return nil, err
+	for _, n := range natives {
+		for _, pattern := range n.cfg.Native.C {
+			matches, err := filepath.Glob(filepath.Join(n.root, pattern))
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range matches {
+				units = append(units, cunit{src: m, flags: []string{fmt.Sprintf("-O%d", opt)}})
+			}
 		}
-		for _, m := range matches {
-			units = append(units, unit{src: m, flags: []string{fmt.Sprintf("-O%d", opt)}})
-		}
+	}
+	if prog.Bridge != nil {
+		units = append(units, cunit{src: prog.Bridge.Shim, flags: []string{fmt.Sprintf("-O%d", opt)}})
 	}
 
 	var objs []string
@@ -312,11 +305,17 @@ func Build(target string, opts Options) (*Result, error) {
 	}
 	link := append([]string{}, objs...)
 	link = append(link, "-o", bin)
+	if prog.Bridge != nil && prog.Bridge.Archive != "" {
+		link = append(link, prog.Bridge.Archive)
+		link = append(link, prog.Bridge.LinkFlags...)
+	}
 	if gc == "boehm" {
 		link = append(link, gcL...)
 	}
-	for _, l := range mod.Native.Link {
-		link = append(link, "-l"+l)
+	for _, n := range natives {
+		for _, l := range n.cfg.Native.Link {
+			link = append(link, "-l"+l)
+		}
 	}
 	link = append(link, "-lm", "-pthread")
 	link = append(link, mod.Build.Flags...) // e.g. -fsanitize=... must reach the linker too

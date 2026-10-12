@@ -15,7 +15,7 @@ import (
 )
 
 // version is set at release time: -ldflags "-X main.version=1.0.0"
-var version = "0.1.0"
+var version = "0.2.0"
 
 var usage = `gocpy — Gocpy toolchain ` + version + `
 
@@ -27,7 +27,13 @@ Usage:
                                  compile to a native binary via C
   gocpy run    [-emit-c dir] [-v] <dir|file> [-- args...]
                                  build and run
-  gocpy doctor                   check the C compiler and libgc
+  gocpy init   <module>          create gocpy.yml (and main.gocpy) in the current directory
+  gocpy get    [-go|-gocpy] <module>[@version|@latest] ...
+                                 add or update a requirement in gocpy.yml
+  gocpy mod    download          download all requirements, update gocpy.sum
+  gocpy mod    verify            check downloaded modules against gocpy.sum
+  gocpy mod    graph             print the requirement graph and selected versions
+  gocpy doctor                   check the C compiler, libgc and the Go toolchain
   gocpy version
 `
 
@@ -49,6 +55,12 @@ func main() {
 		err = cmdBuild(args, false)
 	case "run":
 		err = cmdBuild(args, true)
+	case "init":
+		err = cmdInit(args)
+	case "get":
+		err = cmdGet(args)
+	case "mod":
+		err = cmdMod(args)
 	case "test", "fmt":
 		err = fmt.Errorf("gocpy %s: not implemented yet", cmd)
 	case "doctor":
@@ -114,11 +126,7 @@ func cmdCheck(args []string) error {
 	if len(args) > 0 {
 		target = args[0]
 	}
-	_, paths, err := build.Sources(target)
-	if err != nil {
-		return err
-	}
-	_, _, warnings, err := build.Frontend(paths)
+	prog, _, _, warnings, err := build.Frontend(target, &build.Options{Log: os.Stderr})
 	for _, w := range warnings {
 		fmt.Fprintln(os.Stderr, w)
 	}
@@ -126,7 +134,7 @@ func cmdCheck(args []string) error {
 		fmt.Fprintln(os.Stderr, err)
 		return fmt.Errorf("check failed")
 	}
-	fmt.Printf("ok  %s (%d files)\n", target, len(paths))
+	fmt.Printf("ok  %s (%d files, %d packages)\n", target, len(prog.Files), len(prog.Units))
 	return nil
 }
 

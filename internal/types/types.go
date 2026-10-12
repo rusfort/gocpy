@@ -211,13 +211,19 @@ func (t *Slice) String() string   { return "[]" + t.Elem.String() }
 func (t *Array) String() string   { return fmt.Sprintf("[%d]%s", t.Len, t.Elem) }
 func (t *Named) String() string {
 	if t.display != "" {
-		return t.display
+		return Demangle(t.display)
 	}
 	if t.Pkg != "" {
 		return t.Pkg + "." + t.Obj.name
 	}
-	return t.Obj.name
+	return Demangle(t.Obj.name)
 }
+
+// Demangle maps package-prefixed names of imported Gocpy packages
+// ("geo__Point") back to their source spelling ("geo.Point"). The build
+// driver installs it when a program consists of several packages.
+var Demangle = func(s string) string { return s }
+
 func (t *Unsupported) String() string { return t.Name }
 func (t *Struct) String() string {
 	var parts []string

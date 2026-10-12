@@ -1,0 +1,18 @@
+package main
+
+import (
+    "std/fmt"
+    "github.com/google/uuid"
+    "github.com/rusfort/gocpy/examples/modules/geo"
+)
+
+func main() {
+    p := geo.New(3, 4)
+    fmt.Println("point:", p.String(), "max:", geo.Max(p.X, p.Y))
+
+    id := uuid.NewString() // Go function through the Go bridge
+    fmt.Println("uuid length:", len(id))
+    if err := uuid.Validate("not-a-uuid"); err != nil {
+        fmt.Println("go error:", err)
+    }
+}

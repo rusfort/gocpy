@@ -81,7 +81,7 @@ async function startClient(context) {
   };
   const clientOptions = {
     documentSelector: [{ scheme: 'file', language: 'gocpy' }],
-    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/{*.gocpy,gocpy.yml,gocpy.sum}') },
+    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/{*.gocpy,*.go,gocpy.yml,gocpy.sum}') },
     outputChannel: output,
   };
   client = new LanguageClient('gocpy', 'Gocpy', serverOptions, clientOptions);

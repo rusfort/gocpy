@@ -186,6 +186,7 @@ const (
 	ckValue       = 12
 	ckEnumMember  = 20
 	ckReference   = 18
+	ckFile        = 17
 	ckFolder      = 19
 	skFile        = 1
 	skModule      = 2

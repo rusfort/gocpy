@@ -80,11 +80,12 @@ type PkgInfo struct {
 	Files   []*ast.File
 	ModPath string
 	ModRoot string
+	GoFile  string // local Go package: the imported .go file ("" otherwise)
 }
 
 func (u *unit) info() *PkgInfo {
 	return &PkgInfo{Path: u.path, Name: u.name, Dir: u.dir, Prefix: u.prefix, Display: u.display,
-		IsGo: u.isGo, Target: u.target, Files: u.files, ModPath: u.modPath, ModRoot: u.modRoot}
+		IsGo: u.isGo, Target: u.target, Files: u.files, ModPath: u.modPath, ModRoot: u.modRoot, GoFile: u.goFile}
 }
 
 // Packages lists the packages of the program (dependencies first).
@@ -104,8 +105,17 @@ func (p *Program) PackageOf(file string) *PkgInfo {
 	return nil
 }
 
-// PackageByPath returns a package of the program by import path.
+// PackageByPath returns a package of the program by import path. A local Go
+// import ("./name.go") is resolved in the directory of the target package.
 func (p *Program) PackageByPath(path string) *PkgInfo {
+	if IsLocalGoImport(path) {
+		for _, u := range p.Units {
+			if u.target {
+				path = LocalGoKey(u.dir)
+				break
+			}
+		}
+	}
 	for _, u := range p.Units {
 		if u.path == path {
 			return u.info()

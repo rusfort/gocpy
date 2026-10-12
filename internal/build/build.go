@@ -170,7 +170,7 @@ func Build(target string, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("%s: package %s is not a command (package main required for build)", target, pkg.Name)
 	}
 	if len(mod.Native.Go) > 0 {
-		return nil, fmt.Errorf("gocpy.yml: native.go (linking .go files) is not supported yet (stage 6)")
+		return nil, fmt.Errorf("gocpy.yml: native.go is not used; import the Go files of the package directory instead: import \"./file.go\"")
 	}
 	for _, t := range mod.Build.Targets {
 		if t != runtime.GOOS+"/"+runtime.GOARCH {

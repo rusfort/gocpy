@@ -44,9 +44,12 @@ type Request struct {
 	Requires map[string]string // Go module path -> version
 	Replace  map[string]string // Go module path -> dir or path@version
 	Packages []string          // imported Go packages
-	CC       string
-	Sum      *mod.SumFile
-	Log      io.Writer
+	// Local Go packages: bridge import path (gocpybridge/local/...) -> the
+	// directory with their .go files. They are copied into the bridge module.
+	Local map[string]string
+	CC    string
+	Sum   *mod.SumFile
+	Log   io.Writer
 }
 
 // Package is the Gocpy view of a Go package.
@@ -133,7 +136,7 @@ func goTool() (string, error) {
 	}
 	g, err := exec.LookPath("go")
 	if err != nil {
-		return "", fmt.Errorf("require.go in gocpy.yml needs the Go toolchain (go 1.21 or newer) in PATH; install it from https://go.dev/dl/ or set GOCPY_GO")
+		return "", fmt.Errorf("Go packages (require.go in gocpy.yml or imported .go files) need the Go toolchain (go 1.21 or newer) in PATH; install it from https://go.dev/dl/ or set GOCPY_GO")
 	}
 	return g, nil
 }
@@ -204,6 +207,9 @@ func Build(req Request) (*Result, error) {
 			fmt.Fprintf(h, "%s\n", treeStamp(v))
 		}
 	}
+	for _, k := range keys(req.Local) {
+		fmt.Fprintf(h, "local %s %s\n", k, dirStamp(req.Local[k]))
+	}
 	h.Write([]byte(genSource))
 	key := fmt.Sprintf("%x", h.Sum(nil))[:20]
 	root, err := cacheRoot()
@@ -226,8 +232,23 @@ func Build(req Request) (*Result, error) {
 	defer os.RemoveAll(work)
 	files := map[string]string{
 		"go.mod":      goMod,
-		"go.sum":      req.Sum.Text(),
 		"gen/main.go": genSource,
+	}
+	if req.Sum != nil {
+		files["go.sum"] = req.Sum.Text()
+	}
+	for k, src := range req.Local {
+		names, err := localGoFiles(src)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			data, err := os.ReadFile(filepath.Join(src, n))
+			if err != nil {
+				return nil, err
+			}
+			files[strings.TrimPrefix(k, "gocpybridge/")+"/"+n] = string(data)
+		}
 	}
 	js, _ := json.Marshal(map[string]any{"packages": req.Packages})
 	files["request.json"] = string(js)
@@ -240,7 +261,14 @@ func Build(req Request) (*Result, error) {
 	}
 	env := append(os.Environ(), "GOFLAGS=-mod=mod", "CGO_ENABLED=1", "CC="+req.CC, "GOWORK=off")
 	if req.Log != nil {
-		fmt.Fprintf(req.Log, "gocpy: preparing Go packages %s\n", strings.Join(req.Packages, ", "))
+		var shown []string
+		for _, p := range req.Packages {
+			if d, ok := req.Local[p]; ok {
+				p = "Go files in " + d
+			}
+			shown = append(shown, p)
+		}
+		fmt.Fprintf(req.Log, "gocpy: preparing Go packages %s\n", strings.Join(shown, ", "))
 	}
 	if err := runGo(gobin, work, env, "run", "./gen", "request.json"); err != nil {
 		return nil, err
@@ -254,6 +282,32 @@ func Build(req Request) (*Result, error) {
 	}
 	if err := json.Unmarshal(data, &api); err != nil {
 		return nil, err
+	}
+	// positions in copied local Go files point to the original files
+	for i := range api.Packages {
+		p := &api.Packages[i]
+		src, ok := req.Local[p.Path]
+		if !ok {
+			continue
+		}
+		var prefixes []string
+		for _, w := range []string{work, evalLinks(work)} {
+			prefixes = append(prefixes, filepath.Join(w, filepath.FromSlash(strings.TrimPrefix(p.Path, "gocpybridge/")))+string(filepath.Separator))
+		}
+		fix := func(pos string) string {
+			for _, pre := range prefixes {
+				if strings.HasPrefix(pos, pre) {
+					return filepath.Join(src, strings.TrimPrefix(pos, pre))
+				}
+			}
+			return pos
+		}
+		for j := range p.Funcs {
+			p.Funcs[j].Pos = fix(p.Funcs[j].Pos)
+		}
+		for j := range p.Consts {
+			p.Consts[j].Pos = fix(p.Consts[j].Pos)
+		}
 	}
 	res := &Result{Packages: map[string]*Package{}}
 	nfuncs := 0
@@ -338,6 +392,42 @@ func mergeSum(sum *mod.SumFile, dir string) {
 	if data, err := os.ReadFile(filepath.Join(dir, "go.sum")); err == nil {
 		sum.Merge(string(data))
 	}
+}
+
+// localGoFiles lists the non-test .go files of a directory.
+func localGoFiles(dir string) ([]string, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		n := e.Name()
+		if !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// dirStamp hashes the contents of the local Go files of a directory.
+func dirStamp(dir string) string {
+	h := sha256.New()
+	names, _ := localGoFiles(dir)
+	for _, n := range names {
+		data, _ := os.ReadFile(filepath.Join(dir, n))
+		fmt.Fprintf(h, "%s %d\n", n, len(data))
+		h.Write(data)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func evalLinks(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
 
 // treeStamp summarizes modification times of .go files in a local replacement.

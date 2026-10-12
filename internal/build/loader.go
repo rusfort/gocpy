@@ -32,6 +32,8 @@ type unit struct {
 	modRoot string
 	isGo    bool
 	target  bool
+	goLocal string // for local Go packages: the directory with the .go files
+	goFile  string // for local Go packages: the imported .go file
 
 	prefix  string          // C/AST prefix of package-level names ("" for the target)
 	display string          // name shown in messages
@@ -85,6 +87,7 @@ type loader struct {
 	state    map[string]int // 1 = loading, 2 = done
 	order    []*unit
 	goPkgs   map[string][]token.Pos
+	goLocal  map[string]string // bridge import path of a local Go package -> directory
 	errs     []string
 	qual     map[*ast.Ident]*QualRef
 }
@@ -175,7 +178,7 @@ func Load(target string, opts *Options) (*Program, error) {
 		files = partial
 	}
 	l := &loader{opts: opts, root: root, cfg: cfg, units: map[string]*unit{}, state: map[string]int{},
-		goPkgs: map[string][]token.Pos{}, qual: map[*ast.Ident]*QualRef{}, errs: parseErrs}
+		goPkgs: map[string][]token.Pos{}, goLocal: map[string]string{}, qual: map[*ast.Ident]*QualRef{}, errs: parseErrs}
 	absDir, _ := filepath.Abs(dir)
 	rel, _ := filepath.Rel(root, absDir)
 	modPath := cfg.Module
@@ -204,14 +207,25 @@ func Load(target string, opts *Options) (*Program, error) {
 			delete(l.units, p)
 		}
 	} else if len(l.goPkgs) > 0 {
-		req := gobridge.Request{Root: root, Requires: l.graph.Go, Replace: map[string]string{},
-			CC: cfg.Build.CC, Sum: l.graph.Sum, Log: opts.Log}
+		if l.graph == nil && len(l.goLocal) > 0 && len(cfg.Require.Go) > 0 {
+			// the local Go files may import the Go modules of require.go
+			if err := l.needGraph(); err != nil && !opts.Tolerant {
+				return nil, errors.New(strings.Join(l.errs, "\n"))
+			}
+		}
+		req := gobridge.Request{Root: root, Replace: map[string]string{}, Local: l.goLocal,
+			CC: cfg.Build.CC, Log: opts.Log}
+		if l.graph != nil {
+			req.Requires, req.Sum = l.graph.Go, l.graph.Sum
+		}
 		if req.CC == "" {
 			req.CC = CCompiler()
 		}
-		for p, r := range l.graph.GoRepl {
-			if _, ok := l.graph.Go[p]; ok {
-				req.Replace[p] = r
+		if l.graph != nil {
+			for p, r := range l.graph.GoRepl {
+				if _, ok := l.graph.Go[p]; ok {
+					req.Replace[p] = r
+				}
 			}
 		}
 		for p := range l.goPkgs {
@@ -231,8 +245,10 @@ func Load(target string, opts *Options) (*Program, error) {
 			}
 			req.Packages = nil
 		} else {
-			if err := l.graph.WriteSum(); err != nil && !opts.Tolerant {
-				return nil, err
+			if l.graph != nil {
+				if err := l.graph.WriteSum(); err != nil && !opts.Tolerant {
+					return nil, err
+				}
 			}
 			prog.Bridge = res
 		}
@@ -247,7 +263,10 @@ func Load(target string, opts *Options) (*Program, error) {
 				return nil, fmt.Errorf("go bridge for %q: %v", p, err)
 			}
 			u := l.units[p]
-			u.files, u.name, u.isGo, u.unsup, u.dir = fs, bp.Name, true, bp.Unsupported, filepath.Dir(bp.Stub)
+			u.files, u.name, u.isGo, u.unsup = fs, bp.Name, true, bp.Unsupported
+			if u.goLocal == "" {
+				u.dir = filepath.Dir(bp.Stub)
+			}
 			goUnits = append(goUnits, u)
 		}
 	} else if l.graph != nil {
@@ -385,6 +404,9 @@ func (l *loader) visit(u *unit) {
 }
 
 func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
+	if IsLocalGoImport(p) {
+		return l.resolveLocalGo(from, p, pos)
+	}
 	if u := l.units[p]; u != nil {
 		if u.target && !from.target {
 			return nil, fmt.Errorf("import cycle: %s imports %s", from.path, p)
@@ -392,6 +414,9 @@ func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 		return u, nil
 	}
 	if strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../") || path.IsAbs(p) {
+		if strings.HasSuffix(p, ".go") {
+			return nil, fmt.Errorf("import %q: a Go file can be imported only from the same directory (\"./file.go\")", p)
+		}
 		return nil, fmt.Errorf("relative import %q is not allowed; use the module path (%s/...)", p, from.modPath)
 	}
 	var dir, modPath, modRoot string
@@ -491,6 +516,7 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 	rw := &fileRW{l: l, u: u, imports: map[string]*unit{}, used: map[string]bool{}, std: map[string]bool{}}
 	var keep []*ast.ImportSpec
 	aliasPos := map[string]token.Pos{}
+	aliasSpec := map[string]string{}
 	for _, imp := range f.Imports {
 		p, err := strconv.Unquote(imp.Path.Value)
 		if err != nil || strings.HasPrefix(p, "std/") {
@@ -508,7 +534,7 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 			}
 			continue
 		}
-		dep := l.units[p]
+		dep := l.units[l.importKey(u, p)]
 		if dep == nil {
 			continue // already reported
 		}
@@ -521,6 +547,10 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 			}
 		}
 		if _, dup := aliasPos[name]; dup {
+			if rw.imports[name] == dep && dep.goLocal != "" {
+				l.errorf(imp.Pos(), "%q and %q are files of the same Go package %s; import only one of them", aliasSpec[name], p, dep.name)
+				continue
+			}
 			l.errorf(imp.Pos(), "%s imported twice (import conflicts are not allowed; use an alias)", name)
 			continue
 		}
@@ -528,6 +558,7 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 			l.errorf(imp.Pos(), "import name %s conflicts with a package-level declaration of %s", name, u.name)
 		}
 		aliasPos[name] = imp.Pos()
+		aliasSpec[name] = p
 		rw.imports[name] = dep
 	}
 	f.Imports = keep
@@ -541,7 +572,7 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 	sort.Strings(names)
 	for _, n := range names {
 		if !rw.used[n] {
-			l.errorf(aliasPos[n], "%q imported and not used", rw.imports[n].path)
+			l.errorf(aliasPos[n], "%q imported and not used", aliasSpec[n])
 		}
 	}
 }

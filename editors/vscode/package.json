@@ -2,7 +2,7 @@
   "name": "gocpy",
   "displayName": "Gocpy",
   "description": "Поддержка языка Gocpy: подсветка как в Gocpy IDE, языковой сервер (переходы, ссылки между пакетами, автодополнение, диагностика), тема Gocpy Dark",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "rusfort",
   "license": "MIT",
   "icon": "images/icon.png",

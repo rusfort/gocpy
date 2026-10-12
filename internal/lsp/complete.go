@@ -125,6 +125,13 @@ func (s *server) importItems(path string) []CompletionItem {
 	for _, p := range std {
 		add(p, "стандартная библиотека", ckModule)
 	}
+	if ents, err := os.ReadDir(filepath.Dir(path)); err == nil {
+		for _, e := range ents {
+			if n := e.Name(); !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+				add("./"+n, "Go-файл этой папки", ckFile)
+			}
+		}
+	}
 	pa := s.analysisFor(path)
 	if pa.a != nil && pa.a.Prog != nil {
 		prog := pa.a.Prog
@@ -160,7 +167,7 @@ func (s *server) importItems(path string) []CompletionItem {
 			}
 		}
 		for _, pk := range prog.Packages() {
-			if !pk.Target && !strings.HasPrefix(pk.Path, "std/") {
+			if !pk.Target && pk.GoFile == "" && !strings.HasPrefix(pk.Path, "std/") {
 				add(pk.Path, pk.Name, ckModule)
 			}
 		}

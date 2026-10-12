@@ -122,6 +122,9 @@ func (s *server) packageLoc(pa *pkgAnalysis, path string) (defLoc, bool) {
 		return defLoc{}, false
 	}
 	pk := pa.a.Prog.PackageByPath(path)
+	if pk != nil && pk.GoFile != "" {
+		return goPackageClause(pk.GoFile), true
+	}
 	if pk == nil || len(pk.Files) == 0 {
 		return defLoc{}, false
 	}
@@ -222,6 +225,9 @@ func (s *server) describeImport(pa *pkgAnalysis, path string) string {
 	}
 	if pa.a != nil && pa.a.Prog != nil {
 		if pk := pa.a.Prog.PackageByPath(path); pk != nil {
+			if pk.GoFile != "" {
+				return fmt.Sprintf("```gocpy\npackage %s // %q\n```\nGo-файлы папки пакета (через мост)\n\n%s", pk.Name, path, pk.Dir)
+			}
 			kind := "пакет Gocpy"
 			if pk.IsGo {
 				kind = "пакет Go (через мост)"
@@ -947,4 +953,27 @@ func (s *server) outgoingCalls(it CallHierarchyItem) any {
 		out = append(out, map[string]any{"to": groups[k].item, "fromRanges": groups[k].ranges})
 	}
 	return out
+}
+
+// goPackageClause locates the package name in a Go file.
+func goPackageClause(file string) defLoc {
+	d := defLoc{file: file, line: 1, col: 1, n: 1}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return d
+	}
+	for i, ln := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "package ") {
+			name := strings.TrimSpace(strings.TrimPrefix(t, "package "))
+			if j := strings.IndexAny(name, " /\t"); j >= 0 {
+				name = name[:j]
+			}
+			d.line = i + 1
+			d.col = utf8.RuneCountInString(ln[:strings.Index(ln, "package ")+8]) + 1
+			d.n = max(utf8.RuneCountInString(name), 1)
+			return d
+		}
+	}
+	return d
 }

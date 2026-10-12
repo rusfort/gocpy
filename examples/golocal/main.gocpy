@@ -1,0 +1,27 @@
+package main
+
+import (
+    "std/fmt"
+    "./textstat.go"
+)
+
+@throws
+func ratio(s string) float64 {
+    r, err := textstat.Ratio(s)
+    if err != nil {
+        throw err
+    }
+    return r
+}
+
+func main() {
+    text := "привет из go и gocpy"
+    fmt.Println(textstat.Words(text), "of max", textstat.MaxWords)
+    fmt.Println(textstat.Title(text))
+    try {
+        fmt.Println(f"{ratio(text):.2f}")
+        ratio("")
+    } catch e {
+        fmt.Println("error:", e.Message())
+    }
+}

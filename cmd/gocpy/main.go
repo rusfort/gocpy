@@ -16,7 +16,7 @@ import (
 )
 
 // version is set at release time: -ldflags "-X main.version=1.0.0"
-var version = "0.3.0"
+var version = "0.4.0"
 
 var usage = `gocpy — Gocpy toolchain ` + version + `
 

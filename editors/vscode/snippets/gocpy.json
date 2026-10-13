@@ -1,5 +1,5 @@
 {
-  "Программа": {
+  "Program": {
     "prefix": "main",
     "body": [
       "package main",
@@ -7,21 +7,21 @@
       "import \"std/fmt\"",
       "",
       "func main() {",
-      "\tfmt.Println(\"${1:Привет, Gocpy}\")$0",
+      "\tfmt.Println(\"${1:Hello, Gocpy}\")$0",
       "}"
     ],
-    "description": "Пакет main с функцией main"
+    "description": "Package main with a main function"
   },
-  "Метод": {
+  "Method": {
     "prefix": "meth",
     "body": [
       "func (${1:r} ${2:*T}) ${3:Name}(${4}) ${5}{",
       "\t$0",
       "}"
     ],
-    "description": "Метод типа"
+    "description": "Method of a type"
   },
-  "Функция с @throws": {
+  "Function with @throws": {
     "prefix": "tfunc",
     "body": [
       "@throws",
@@ -29,9 +29,9 @@
       "\t$0",
       "}"
     ],
-    "description": "Функция, выбрасывающая исключения"
+    "description": "Function that may throw exceptions"
   },
-  "Перегрузка": {
+  "Overload": {
     "prefix": "ofunc",
     "body": [
       "@overload",
@@ -39,45 +39,45 @@
       "\t$0",
       "}"
     ],
-    "description": "Перегруженная функция (@overload обязательна)"
+    "description": "Overloaded function (@overload is required)"
   },
-  "Оператор": {
+  "Operator": {
     "prefix": "opfunc",
     "body": [
       "func (${1:a} ${2:T}) ${3:+}(${4:b} ${2:T}) ${2:T} {",
       "\t$0",
       "}"
     ],
-    "description": "Метод-оператор"
+    "description": "Operator method"
   },
-  "Структура": {
+  "Struct": {
     "prefix": "struct",
     "body": [
       "type ${1:Name} struct {",
       "\t${2:Field} ${3:int}",
       "}"
     ],
-    "description": "Структурный тип"
+    "description": "Struct type"
   },
-  "Интерфейс": {
+  "Interface": {
     "prefix": "iface",
     "body": [
       "type ${1:Name} interface {",
       "\t${2:Method}() ${3:string}",
       "}"
     ],
-    "description": "Интерфейс"
+    "description": "Interface type"
   },
-  "Дженерик": {
+  "Generic function": {
     "prefix": "gfunc",
     "body": [
       "func ${1:Name}[${2:T} ${3:any}](${4:x} ${2:T}) ${2:T} {",
       "\t$0",
       "}"
     ],
-    "description": "Функция с параметром типа"
+    "description": "Function with a type parameter"
   },
-  "Цикл со счётчиком": {
+  "For loop": {
     "prefix": "fori",
     "body": [
       "for ${1:i} := 0; ${1:i} < ${2:n}; ${1:i}++ {",
@@ -86,16 +86,16 @@
     ],
     "description": "for i := 0; i < n; i++"
   },
-  "Цикл for in": {
+  "For-in loop": {
     "prefix": "forin",
     "body": [
       "for ${1:i}, ${2:x} in ${3:xs} {",
       "\t$0",
       "}"
     ],
-    "description": "Обход с индексом"
+    "description": "Loop with index and value"
   },
-  "Проверка ошибки": {
+  "Error check": {
     "prefix": "iferr",
     "body": [
       "if err != nil {",
@@ -115,27 +115,27 @@
       "\t$0",
       "}"
     ],
-    "description": "Полный блок исключений"
+    "description": "Full exception handling block"
   },
-  "Генератор списка": {
+  "List comprehension": {
     "prefix": "comp",
     "body": [
       "[${1:x} for ${1:x} in ${2:xs} if ${3:cond}]"
     ],
-    "description": "Генератор списка"
+    "description": "List comprehension"
   },
-  "f-строка": {
+  "f-string": {
     "prefix": "fs",
     "body": [
       "f\"${1:text} {${2:expr}}\""
     ],
-    "description": "Форматированная строка"
+    "description": "Formatted string"
   },
-  "Игнорировать неиспользуемое": {
+  "Ignore unused": {
     "prefix": "ignore",
     "body": [
       "//gocpy:ignore:unused"
     ],
-    "description": "Подавить ошибку о неиспользуемом объявлении"
+    "description": "Suppress the unused declaration error"
   }
 }

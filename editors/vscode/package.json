@@ -1,8 +1,8 @@
 {
   "name": "gocpy",
   "displayName": "Gocpy",
-  "description": "Поддержка языка Gocpy: подсветка как в Gocpy IDE, языковой сервер (переходы, ссылки между пакетами, автодополнение, диагностика), тема Gocpy Dark",
-  "version": "0.2.1",
+  "description": "Gocpy language support: rich semantic highlighting, IntelliSense, code navigation across packages and Go code, diagnostics while typing, and the Gocpy Dark theme.",
+  "version": "0.3.0",
   "publisher": "rusfort",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -30,7 +30,11 @@
     "c",
     "python",
     "compiler",
-    "lsp"
+    "language server",
+    "lsp",
+    "intellisense",
+    "syntax highlighting",
+    "snippets"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -79,77 +83,77 @@
       {
         "id": "var",
         "superType": "variable",
-        "description": "Переменная"
+        "description": "Variable"
       },
       {
         "id": "field",
         "superType": "property",
-        "description": "Поле структуры"
+        "description": "Struct field"
       },
       {
         "id": "fieldDecl",
         "superType": "property",
-        "description": "Объявление поля"
+        "description": "Field declaration"
       },
       {
         "id": "label",
         "superType": "label",
-        "description": "Метка"
+        "description": "Label"
       },
       {
         "id": "funcDecl",
         "superType": "function",
-        "description": "Объявление функции"
+        "description": "Function declaration"
       },
       {
         "id": "funcCall",
         "superType": "function",
-        "description": "Вызов функции"
+        "description": "Function call"
       },
       {
         "id": "funcMethod",
         "superType": "method",
-        "description": "Метод"
+        "description": "Method"
       },
       {
         "id": "funcBuiltin",
         "superType": "function",
-        "description": "Встроенная функция"
+        "description": "Built-in function"
       },
       {
         "id": "funcStd",
         "superType": "function",
-        "description": "Функция пакета"
+        "description": "Package function"
       },
       {
         "id": "funcOperator",
         "superType": "operator",
-        "description": "Метод-оператор"
+        "description": "Operator method"
       },
       {
         "id": "pkgName",
         "superType": "namespace",
-        "description": "Имя пакета"
+        "description": "Package name"
       },
       {
         "id": "pkgDecl",
         "superType": "namespace",
-        "description": "Объявление пакета"
+        "description": "Package declaration"
       },
       {
         "id": "pkgMember",
         "superType": "variable",
-        "description": "Константа или переменная пакета"
+        "description": "Package constant or variable"
       },
       {
         "id": "constUser",
         "superType": "variable",
-        "description": "Константа"
+        "description": "Constant"
       },
       {
         "id": "constBool",
         "superType": "keyword",
-        "description": "true/false"
+        "description": "true / false"
       },
       {
         "id": "constNil",
@@ -159,47 +163,47 @@
       {
         "id": "typeBuiltin",
         "superType": "type",
-        "description": "Встроенный тип"
+        "description": "Built-in type"
       },
       {
         "id": "typeError",
         "superType": "type",
-        "description": "error/Exception"
+        "description": "error / Exception"
       },
       {
         "id": "typeUser",
         "superType": "type",
-        "description": "Пользовательский тип"
+        "description": "User-defined type"
       },
       {
         "id": "typeStd",
         "superType": "type",
-        "description": "Тип стандартной библиотеки"
+        "description": "Standard library type"
       },
       {
         "id": "typeParam",
         "superType": "typeParameter",
-        "description": "Параметр типа"
+        "description": "Type parameter"
       },
       {
         "id": "typeConstraint",
         "superType": "interface",
-        "description": "Ограничение дженерика"
+        "description": "Generic constraint"
       },
       {
         "id": "unsafeFunc",
         "superType": "function",
-        "description": "Функция unsafe"
+        "description": "Function available in unsafe blocks"
       },
       {
         "id": "unsafeCast",
         "superType": "type",
-        "description": "Приведение в unsafe"
+        "description": "Pointer cast in an unsafe block"
       },
       {
         "id": "opPtr",
         "superType": "operator",
-        "description": "Операторы указателей * и &"
+        "description": "Pointer operators * and &"
       }
     ],
     "semanticTokenScopes": [
@@ -287,7 +291,7 @@
     "colors": [
       {
         "id": "gocpy.unsafeBackground",
-        "description": "Фон блоков unsafe { … }",
+        "description": "Background of `unsafe { … }` blocks.",
         "defaults": {
           "dark": "#2d1f22",
           "light": "#fdecee",
@@ -302,22 +306,22 @@
         "gocpy.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Путь к `gocpy`. Если пусто — ищется в `PATH`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/go/bin`."
+          "markdownDescription": "Path to the `gocpy` executable. When empty, it is looked up in `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` and `~/go/bin`."
         },
         "gocpy.languageServer.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Включить языковой сервер (gocpy lsp): переходы, ссылки, автодополнение, диагностика, семантическая подсветка."
+          "markdownDescription": "Enable the language server (`gocpy lsp`): navigation, references, completion, diagnostics and semantic highlighting."
         },
         "gocpy.unsafeHighlight": {
           "type": "boolean",
           "default": true,
-          "description": "Подсвечивать фон блоков unsafe { … }."
+          "markdownDescription": "Highlight the background of `unsafe { … }` blocks."
         },
         "gocpy.suggestTheme": {
           "type": "boolean",
           "default": true,
-          "description": "Предложить тему Gocpy Dark при первом открытии файла .gocpy."
+          "markdownDescription": "Offer the Gocpy Dark theme the first time a `.gocpy` file is opened."
         },
         "gocpy.trace.server": {
           "type": "string",
@@ -327,35 +331,35 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Трассировка обмена с языковым сервером."
+          "markdownDescription": "Trace the communication between VS Code and the language server."
         }
       }
     },
     "commands": [
       {
         "command": "gocpy.restartServer",
-        "title": "Перезапустить языковой сервер",
+        "title": "Restart Language Server",
         "category": "Gocpy"
       },
       {
         "command": "gocpy.run",
-        "title": "Запустить пакет",
+        "title": "Run Package",
         "category": "Gocpy",
         "icon": "$(play)"
       },
       {
         "command": "gocpy.build",
-        "title": "Собрать пакет",
+        "title": "Build Package",
         "category": "Gocpy"
       },
       {
         "command": "gocpy.check",
-        "title": "Проверить пакет",
+        "title": "Check Package",
         "category": "Gocpy"
       },
       {
         "command": "gocpy.useTheme",
-        "title": "Включить тему Gocpy Dark",
+        "title": "Use Gocpy Dark Theme",
         "category": "Gocpy"
       }
     ],
@@ -405,5 +409,9 @@
     "esbuild": "^0.24.2",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/rusfort/gocpy/issues"
+  },
+  "qna": "https://github.com/rusfort/gocpy/discussions"
 }

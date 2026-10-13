@@ -6,3 +6,4 @@ test/**
 package-lock.json
 .gitignore
 .vscode-test/**
+images/screenshots/**

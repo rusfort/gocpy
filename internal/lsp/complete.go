@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/rusfort/gocpy/internal/build"
+	"github.com/rusfort/gocpy/internal/gobridge"
 	"github.com/rusfort/gocpy/internal/token"
 	"github.com/rusfort/gocpy/internal/types"
 )
@@ -304,7 +306,37 @@ func (s *server) objItem(pa *pkgAnalysis, name string, o types.Object) (Completi
 	default:
 		return it, false
 	}
+	if pos := o.Pos(); pos.File != "" && pos.Line > 0 {
+		doc := "```gocpy\n" + s.objString(pa, o, name) + "\n```"
+		if c := s.objDoc(pos); c != "" {
+			doc += "\n" + c
+		}
+		it.Documentation = md(doc)
+	}
 	return it, true
+}
+
+// objDoc is the doc comment of a declaration; for Go bridge stubs it is read
+// from the Go source (// go:pos above the stub declaration).
+func (s *server) objDoc(pos token.Pos) string {
+	t := s.texts(pos.File)
+	for l := pos.Line - 1; l >= 1 && l >= pos.Line-3; l-- {
+		lt := strings.TrimSpace(t.line(l))
+		if strings.HasPrefix(lt, gobridge.GoPosPrefix) {
+			ref := strings.TrimPrefix(lt, gobridge.GoPosPrefix)
+			parts := strings.Split(ref, ":")
+			if len(parts) >= 3 {
+				if ln, err := strconv.Atoi(parts[len(parts)-2]); err == nil {
+					return s.docComment(defLoc{file: strings.Join(parts[:len(parts)-2], ":"), line: ln})
+				}
+			}
+			return ""
+		}
+		if !strings.HasPrefix(lt, "@") {
+			break
+		}
+	}
+	return s.docComment(defLoc{file: pos.File, line: pos.Line})
 }
 
 // importAliases maps package names usable in the file to import paths.

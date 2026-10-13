@@ -62,17 +62,17 @@ async function startClient(context) {
   const bin = findGocpy();
   if (!bin) {
     vscode.window.showWarningMessage(
-      'Gocpy: компилятор gocpy не найден. Подсветка работает, но переходы, ссылки и автодополнение требуют gocpy 0.3.0 или новее.',
-      'Как установить', 'Указать путь').then((pick) => {
-      if (pick === 'Как установить') vscode.env.openExternal(vscode.Uri.parse('https://rusfort.github.io/gocpy/'));
-      if (pick === 'Указать путь') vscode.commands.executeCommand('workbench.action.openSettings', 'gocpy.path');
+      'Gocpy: the gocpy compiler was not found. Syntax highlighting works, but navigation, references and completion need gocpy 0.3.0 or newer.',
+      'How to Install', 'Set Path').then((pick) => {
+      if (pick === 'How to Install') vscode.env.openExternal(vscode.Uri.parse('https://rusfort.github.io/gocpy/'));
+      if (pick === 'Set Path') vscode.commands.executeCommand('workbench.action.openSettings', 'gocpy.path');
     });
     return;
   }
   const ver = versionOf(bin);
   if (ver && less(ver, MIN_LSP)) {
     vscode.window.showWarningMessage(
-      `Gocpy: найден gocpy ${ver.join('.')}, а языковому серверу нужен 0.3.0 или новее. Обновите: brew upgrade gocpy. Пока работает только подсветка.`);
+      `Gocpy: found gocpy ${ver.join('.')}, but the language server needs 0.3.0 or newer. Update it with "brew upgrade gocpy". Until then only syntax highlighting is available.`);
     return;
   }
   const serverOptions = {
@@ -89,7 +89,7 @@ async function startClient(context) {
     await client.start();
   } catch (e) {
     output.appendLine('gocpy lsp: ' + e);
-    vscode.window.showErrorMessage('Gocpy: не удалось запустить языковой сервер: ' + e.message);
+    vscode.window.showErrorMessage('Gocpy: failed to start the language server: ' + e.message);
     client = null;
     return;
   }
@@ -167,7 +167,7 @@ function applyUnsafe(doc) {
 function runInTerminal(sub) {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.document.languageId !== 'gocpy') {
-    vscode.window.showInformationMessage('Gocpy: откройте файл .gocpy');
+    vscode.window.showInformationMessage('Gocpy: open a .gocpy file first.');
     return;
   }
   const bin = findGocpy() || 'gocpy';
@@ -188,8 +188,8 @@ async function suggestTheme(context) {
   if (current === 'Gocpy Dark') return;
   await context.globalState.update('gocpy.themeSuggested', true);
   const pick = await vscode.window.showInformationMessage(
-    'Gocpy: включить тему Gocpy Dark с цветами как в Gocpy IDE?', 'Включить', 'Не сейчас');
-  if (pick === 'Включить') await useTheme();
+    'Gocpy: switch to the Gocpy Dark theme with the colors of the Gocpy IDE?', 'Use Gocpy Dark', 'Not Now');
+  if (pick === 'Use Gocpy Dark') await useTheme();
 }
 
 async function useTheme() {

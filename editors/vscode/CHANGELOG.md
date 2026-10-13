@@ -1,21 +1,40 @@
 # Changelog
 
+All notable changes to the Gocpy extension are documented in this file.
+
+## 0.3.0
+
+- English user interface: command titles, settings, notifications, snippet
+  names and semantic token descriptions.
+- New README with screenshots, settings, commands and troubleshooting.
+- Completion items show the declaration and its documentation comment,
+  including documentation of Go functions (requires gocpy 0.4.1 or newer).
+
 ## 0.2.1
-- Анализ обновляется при изменении `.go` файлов: они импортируются из Gocpy как `import "./file.go"` (gocpy 0.4.0+).
-- Дополнение путей импорта предлагает Go-файлы папки пакета; переход к определению и наведение ведут в эти файлы.
+
+- Re-analyze when `.go` files change. Go files of the package directory can be
+  imported from Gocpy with `import "./file.go"` (gocpy 0.4.0 or newer).
+- Import path completion suggests the Go files of the package directory.
+  Go to Definition and hover lead into these files.
 
 ## 0.2.0
-- Языковой сервер `gocpy lsp` (нужен gocpy 0.3.0+):
-  - диагностика при наборе;
-  - переход к определению, в том числе в исходники Go;
-  - ссылки и переименование между пакетами;
-  - иерархия вызовов, подсказки при наведении;
-  - автодополнение ключевых слов, аннотаций, членов пакетов и типов, путей импорта;
-  - подсказка параметров, символы.
-- Семантическая подсветка с классами Gocpy IDE.
-- Тема Gocpy Dark с цветами Gocpy IDE.
-- Новая грамматика: группы ключевых слов, f-строки, виды чисел, аннотации, интринсики, TODO.
-- Фон блоков `unsafe`, шаблоны кода, команды запуска и сборки.
+
+- Language server support through `gocpy lsp` (requires gocpy 0.3.0 or newer):
+  - diagnostics while typing;
+  - Go to Definition, including Go sources;
+  - Find All References and Rename across packages;
+  - Call Hierarchy and hover documentation;
+  - completion of keywords, annotations, package and type members and
+    import paths;
+  - signature help and document and workspace symbols.
+- Semantic highlighting with the token classes of the Gocpy IDE.
+- The Gocpy Dark theme with the colors of the Gocpy IDE.
+- A new grammar: keyword groups, f-strings, number literals, annotations,
+  intrinsics, `TODO` markers.
+- Background highlighting of `unsafe` blocks, snippets, and run and build
+  commands.
 
 ## 0.1.0
-- Первая версия: подсветка синтаксиса, иконка файлов `.gocpy`, конфигурация языка.
+
+- Initial release: syntax highlighting, the `.gocpy` file icon and language
+  configuration.

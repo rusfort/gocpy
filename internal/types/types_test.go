@@ -332,3 +332,40 @@ func TestUnsafe(t *testing.T) {
 	fails(t, `func main() { _ = @nope(1) }`, "unknown intrinsic")
 	ok(t, `func main() { _ = @be_to_le(uint32(1)) }`)
 }
+
+// Imports used only inside generic declarations count as used even when the
+// generic is never instantiated (for example, a library package checked alone).
+func TestImportsUsedInGenerics(t *testing.T) {
+	src := `package lib
+
+import (
+	"std/errors"
+	"std/fmt"
+	"std/sync"
+)
+
+type Slice[T any] struct {
+	mtx sync.Mutex
+	sl  []T
+}
+
+func (s *Slice[T]) Err() error {
+	return errors.New("x")
+}
+
+func Show[T any](x T) {
+	fmt.Println(x)
+}
+`
+	if err := checkSrc(t, src); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	src = strings.Replace(src, "\t\"std/sync\"\n", "\t\"std/sync\"\n\t\"std/time\"\n", 1)
+	err := checkSrc(t, src)
+	if err == nil || !strings.Contains(err.Error(), `"std/time" imported and not used`) {
+		t.Errorf("want unused std/time, got %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "std/sync") {
+		t.Errorf("std/sync reported as unused: %v", err)
+	}
+}

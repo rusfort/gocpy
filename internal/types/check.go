@@ -523,6 +523,7 @@ func (c *checker) run() {
 	}
 	// unused imports are errors (as in Go)
 	for _, f := range c.pkg.Files {
+		c.markGenericImportUses(f)
 		for _, pn := range c.imports[f] {
 			if !pn.used {
 				c.errorf(pn.pos, "%q imported and not used", pn.Path)
@@ -532,6 +533,45 @@ func (c *checker) run() {
 }
 
 var knownDirectives = map[string]bool{"ignore:unused": true}
+
+// markGenericImportUses marks imports referenced from generic declarations as
+// used. Generic types, functions and their methods are type-checked only when
+// instantiated, so a package that declares a generic without using it (or a
+// library package checked on its own) would otherwise report such imports as
+// unused. Shadowing is forbidden, so a selector on an import name always
+// refers to the import.
+func (c *checker) markGenericImportUses(f *ast.File) {
+	imps := c.imports[f]
+	if len(imps) == 0 {
+		return
+	}
+	mark := func(n ast.Node) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			if se, ok := n.(*ast.SelectorExpr); ok {
+				if id, ok := se.X.(*ast.Ident); ok {
+					if pn := imps[id.Name]; pn != nil {
+						pn.used = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.GenDecl:
+			for _, sp := range d.Specs {
+				if ts, ok := sp.(*ast.TypeSpec); ok && ts.TypeParams != nil {
+					mark(ts)
+				}
+			}
+		case *ast.FuncDecl:
+			if _, _, generic := recvBase(d.Recv); generic || d.Type.TypeParams != nil {
+				mark(d)
+			}
+		}
+	}
+}
 
 // hasDirective reports whether the line of pos carries //gocpy:<d>.
 func (c *checker) hasDirective(pos token.Pos, d string) bool {

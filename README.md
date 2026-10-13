@@ -27,7 +27,7 @@
 
 ---
 
-## Abstract
+## Introduction
 
 Gocpy is a general-purpose, statically typed programming language. It keeps
 Go's readable syntax and Go's model of packages, interfaces, generics and

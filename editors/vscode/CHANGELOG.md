@@ -2,6 +2,13 @@
 
 All notable changes to the Gocpy extension are documented in this file.
 
+## 0.3.1
+
+- English documentation of keywords, built-ins and annotations in hover and
+  completion (with gocpy 0.4.1 or newer).
+- Recommended with gocpy 0.4.2: imports used only inside generic types and
+  functions are no longer reported as unused.
+
 ## 0.3.0
 
 - English user interface: command titles, settings, notifications, snippet

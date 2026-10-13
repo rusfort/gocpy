@@ -2,7 +2,7 @@
   "name": "gocpy",
   "displayName": "Gocpy",
   "description": "Gocpy language support: rich semantic highlighting, IntelliSense, code navigation across packages and Go code, diagnostics while typing, and the Gocpy Dark theme.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "rusfort",
   "license": "MIT",
   "icon": "images/icon.png",

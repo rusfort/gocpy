@@ -69,7 +69,8 @@ set [`gocpy.path`](#settings).
   and Go files of the package directory). Functions that work only inside
   `unsafe` are suggested only there.
 - **Hover:** signatures and documentation comments of Gocpy declarations and
-  of Go functions used through the Go bridge.
+  of Go functions used through the Go bridge, plus reference documentation for
+  keywords, built-in types and functions, and annotations.
 - **Signature help:** parameters of the current call, including every
   variant of an `@overload` set.
 
@@ -192,9 +193,6 @@ Token Types** on the extension page.
 
 ## Known limitations
 
-- Documentation for keywords and annotations shown on hover and in completion
-  is currently in Russian. Documentation of your own code is shown as
-  written.
 - The extension is distributed as a `.vsix` file and is not yet published on
   the Visual Studio Marketplace.
 

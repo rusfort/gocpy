@@ -131,14 +131,14 @@ func tdp(uri string, p Position) map[string]any {
 
 const geoSrc = `package geo
 
-// Point — точка на плоскости.
+// Point is a point on a plane.
 type Point struct {
     X int
     Y int
     tag string
 }
 
-// New создаёт точку.
+// New creates a point.
 func New(x int, y int) Point {
     return Point{X: x, Y: y, tag: "p"}
 }
@@ -220,11 +220,11 @@ func TestLSP(t *testing.T) {
 	// hover over geo.New shows the signature and the doc comment
 	var hv struct{ Contents MarkupContent }
 	c.call("textDocument/hover", tdp(uri, posOf(t, mainSrc, "New(3", 1)), &hv)
-	if !strings.Contains(hv.Contents.Value, "func New(x int, y int) Point") || !strings.Contains(hv.Contents.Value, "создаёт точку") {
+	if !strings.Contains(hv.Contents.Value, "func New(x int, y int) Point") || !strings.Contains(hv.Contents.Value, "creates a point") {
 		t.Errorf("hover New: %q", hv.Contents.Value)
 	}
 	c.call("textDocument/hover", tdp(uri, posOf(t, mainSrc, "func main", 1)), &hv)
-	if !strings.Contains(hv.Contents.Value, "Объявление функции") {
+	if !strings.Contains(hv.Contents.Value, "Declares a function") {
 		t.Errorf("hover func: %q", hv.Contents.Value)
 	}
 

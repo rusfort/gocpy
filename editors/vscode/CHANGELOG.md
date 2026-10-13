@@ -9,6 +9,8 @@ All notable changes to the Gocpy extension are documented in this file.
 - New README with screenshots, settings, commands and troubleshooting.
 - Completion items show the declaration and its documentation comment,
   including documentation of Go functions (requires gocpy 0.4.1 or newer).
+- Documentation of keywords, built-ins and annotations in hover and
+  completion is in English (gocpy 0.4.1 or newer).
 
 ## 0.2.1
 

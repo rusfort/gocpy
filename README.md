@@ -420,7 +420,7 @@ replace:                                   # optional, main module only
 - Packages are initialized in dependency order. Import cycles are errors.
 
 Commands: `gocpy init`, `gocpy get`, `gocpy mod download | verify | graph`.
-The full reference (in Russian) is in [docs/MODULES.md](docs/MODULES.md), and
+The full reference is in [docs/MODULES.md](docs/MODULES.md), and
 a working example is in [examples/modules](examples/modules).
 
 ## Interoperability

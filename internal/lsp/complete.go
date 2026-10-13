@@ -125,12 +125,12 @@ func (s *server) importItems(path string) []CompletionItem {
 	}
 	sort.Strings(std)
 	for _, p := range std {
-		add(p, "стандартная библиотека", ckModule)
+		add(p, "standard library", ckModule)
 	}
 	if ents, err := os.ReadDir(filepath.Dir(path)); err == nil {
 		for _, e := range ents {
 			if n := e.Name(); !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
-				add("./"+n, "Go-файл этой папки", ckFile)
+				add("./"+n, "Go file of this directory", ckFile)
 			}
 		}
 	}
@@ -162,7 +162,7 @@ func (s *server) importItems(path string) []CompletionItem {
 						if rel != "." {
 							ip += "/" + filepath.ToSlash(rel)
 						}
-						add(ip, "пакет модуля", ckFolder)
+						add(ip, "package of this module", ckFolder)
 					}
 					return nil
 				})
@@ -259,7 +259,7 @@ func (s *server) scopeItems(pa *pkgAnalysis, path string, line, col int) []Compl
 		}
 	}
 	for _, n := range []string{"len", "cap", "append", "make", "new", "sizeof", "close", "delete"} {
-		add(CompletionItem{Label: n, Kind: ckFunction, Detail: "встроенная функция", Documentation: md(builtinDocs[n]),
+		add(CompletionItem{Label: n, Kind: ckFunction, Detail: "built-in function", Documentation: md(builtinDocs[n]),
 			InsertText: n + "($1)", InsertTextFormat: formatSnippet, SortText: "2" + n})
 	}
 	if inUnsafe {
@@ -270,7 +270,7 @@ func (s *server) scopeItems(pa *pkgAnalysis, path string, line, col int) []Compl
 	}
 	for _, n := range []string{"bool", "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32",
 		"uint64", "uintptr", "float32", "float64", "string", "byte", "rune", "any", "error", "Exception", "comparable", "thread"} {
-		add(CompletionItem{Label: n, Kind: ckClass, Detail: "встроенный тип", Documentation: md(builtinDocs[n]), SortText: "2" + n})
+		add(CompletionItem{Label: n, Kind: ckClass, Detail: "built-in type", Documentation: md(builtinDocs[n]), SortText: "2" + n})
 	}
 	for _, n := range []string{"true", "false", "nil", "iota"} {
 		add(CompletionItem{Label: n, Kind: ckConstant, Documentation: md(builtinDocs[n]), SortText: "2" + n})
@@ -290,19 +290,19 @@ func (s *server) objItem(pa *pkgAnalysis, name string, o types.Object) (Completi
 		it.Kind, it.Detail = ckFunction, s.typeStr(pa, o.Type())
 		it.InsertText, it.InsertTextFormat = name+"($1)", formatSnippet
 	case *types.FuncSet:
-		it.Kind, it.Detail = ckFunction, "перегружена"
+		it.Kind, it.Detail = ckFunction, "overloaded"
 		it.InsertText, it.InsertTextFormat = name+"($1)", formatSnippet
 	case *types.GenericFunc:
-		it.Kind, it.Detail = ckFunction, "дженерик"
+		it.Kind, it.Detail = ckFunction, "generic function"
 		it.InsertText, it.InsertTextFormat = name+"($1)", formatSnippet
 	case *types.TypeName:
 		it.Kind = ckStruct
 		if _, ok := o.Type().Underlying().(*types.Interface); ok {
 			it.Kind = ckInterface
 		}
-		it.Detail = "тип"
+		it.Detail = "type"
 	case *types.GenericType:
-		it.Kind, it.Detail = ckStruct, "дженерик-тип"
+		it.Kind, it.Detail = ckStruct, "generic type"
 	default:
 		return it, false
 	}
@@ -610,7 +610,7 @@ func (s *server) typeMembers(pa *pkgAnalysis, t types.Type) []CompletionItem {
 				InsertText: m.Name + "($1)", InsertTextFormat: formatSnippet})
 		}
 	case *types.Slice:
-		items = append(items, CompletionItem{Label: "append", Kind: ckMethod, Detail: "добавить элементы в срез",
+		items = append(items, CompletionItem{Label: "append", Kind: ckMethod, Detail: "append elements to the slice",
 			InsertText: "append($1)", InsertTextFormat: formatSnippet})
 	}
 	return items

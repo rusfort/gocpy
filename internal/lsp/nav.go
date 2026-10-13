@@ -221,20 +221,20 @@ func (s *server) hover(p TextDocumentPositionParams) any {
 
 func (s *server) describeImport(pa *pkgAnalysis, path string) string {
 	if strings.HasPrefix(path, "std/") {
-		return fmt.Sprintf("```gocpy\nimport %q\n```\nСтандартная библиотека Gocpy.", path)
+		return fmt.Sprintf("```gocpy\nimport %q\n```\nGocpy standard library.", path)
 	}
 	if pa.a != nil && pa.a.Prog != nil {
 		if pk := pa.a.Prog.PackageByPath(path); pk != nil {
 			if pk.GoFile != "" {
-				return fmt.Sprintf("```gocpy\npackage %s // %q\n```\nGo-файлы папки пакета (через мост)\n\n%s", pk.Name, path, pk.Dir)
+				return fmt.Sprintf("```gocpy\npackage %s // %q\n```\nGo files of the package directory (through the Go bridge)\n\n%s", pk.Name, path, pk.Dir)
 			}
-			kind := "пакет Gocpy"
+			kind := "Gocpy package"
 			if pk.IsGo {
-				kind = "пакет Go (через мост)"
+				kind = "Go package (through the Go bridge)"
 			}
 			md := fmt.Sprintf("```gocpy\npackage %s // %q\n```\n%s", pk.Name, path, kind)
 			if pk.ModPath != "" {
-				md += ", модуль `" + pk.ModPath + "`"
+				md += ", module `" + pk.ModPath + "`"
 			}
 			if !pk.IsGo {
 				md += "\n\n" + pk.Dir
@@ -280,7 +280,7 @@ func (s *server) describe(pa *pkgAnalysis, o *occ) string {
 	if d, ok := s.definitionOf(pa, o); ok {
 		doc = s.docComment(d)
 		if strings.HasSuffix(d.file, ".go") {
-			extra = fmt.Sprintf("Определено в Go: `%s:%d`", filepath.Base(d.file), d.line)
+			extra = fmt.Sprintf("Defined in Go: `%s:%d`", filepath.Base(d.file), d.line)
 		}
 	}
 	name := s.texts(o.file).line(o.line)
@@ -291,7 +291,7 @@ func (s *server) describe(pa *pkgAnalysis, o *occ) string {
 	case o.field != nil:
 		code = fmt.Sprintf("field %s %s", o.field.Name, s.typeStr(pa, o.field.Type))
 		if o.fieldOf != nil {
-			extra = "поле типа `" + s.typeStr(pa, deref(o.fieldOf)) + "`"
+			extra = "field of `" + s.typeStr(pa, deref(o.fieldOf)) + "`"
 		}
 	case o.cls == "pkgName" || o.cls == "pkgDecl":
 		return s.describeImport(pa, o.pkgPath)
@@ -299,6 +299,16 @@ func (s *server) describe(pa *pkgAnalysis, o *occ) string {
 		code = "field " + name
 	case o.obj != nil:
 		code = s.objString(pa, o.obj, name)
+		if doc == "" {
+			switch ob := o.obj.(type) {
+			case *types.Builtin:
+				doc = builtinDocs[name]
+			case *types.TypeName:
+				if ob.Pos().File == "" {
+					doc = builtinDocs[ob.Name()]
+				}
+			}
+		}
 	default:
 		if d := builtinDocs[name]; d != "" {
 			return d
@@ -364,19 +374,13 @@ func (s *server) objString(pa *pkgAnalysis, obj types.Object, name string) strin
 		if n, ok := o.Type().(*types.Named); ok && n.Pkg != "" {
 			return fmt.Sprintf("type %s.%s", n.Pkg, o.Name())
 		}
-		if d := builtinDocs[o.Name()]; d != "" {
-			return "type " + o.Name() + "\n```\n" + d + "\n```gocpy"
-		}
 		return "type " + o.Name()
 	case *types.GenericType:
 		return s.typeSource(o.Pos())
 	case *types.PkgName:
 		return fmt.Sprintf("package %s // %q", name, o.Path)
 	case *types.Builtin:
-		if d := builtinDocs[name]; d != "" {
-			return name + "\n```\n" + d + "\n```gocpy"
-		}
-		return "func " + name
+		return name
 	case *types.Nil:
 		return "nil"
 	}
@@ -571,16 +575,16 @@ func (e *rpcErr) Error() string { return e.msg }
 func (s *server) renameTarget(p TextDocumentPositionParams) (*pkgAnalysis, *occ, error) {
 	pa, o, _, _, _ := s.occAt(p)
 	if o == nil || o.key == "" {
-		return nil, nil, &rpcErr{"здесь нечего переименовывать"}
+		return nil, nil, &rpcErr{"nothing to rename here"}
 	}
 	for _, pre := range []string{"builtin:", "std:", "pkg:", "pkgdecl:", "iface:"} {
 		if strings.HasPrefix(o.key, pre) {
-			return nil, nil, &rpcErr{"это имя нельзя переименовать (встроенное, стандартная библиотека или пакет)"}
+			return nil, nil, &rpcErr{"this name cannot be renamed (built-in, standard library or package name)"}
 		}
 	}
 	d, ok := s.definitionOf(pa, o)
 	if !ok || !strings.HasSuffix(d.file, ".gocpy") || !s.inWorkspace(d.file) {
-		return nil, nil, &rpcErr{"объявление находится вне рабочей области"}
+		return nil, nil, &rpcErr{"the declaration is outside the workspace"}
 	}
 	return pa, o, nil
 }
@@ -599,7 +603,7 @@ func (s *server) rename(p TextDocumentPositionParams, newName string) (any, erro
 		return nil, err
 	}
 	if !validIdent(newName) {
-		return nil, &rpcErr{fmt.Sprintf("%q — недопустимое имя", newName)}
+		return nil, &rpcErr{fmt.Sprintf("%q is not a valid identifier", newName)}
 	}
 	changes := map[string][]TextEdit{}
 	for _, r := range s.refsOf(pa, o, true) {

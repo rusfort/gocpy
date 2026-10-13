@@ -15,7 +15,7 @@ func ratio(s string) float64 {
 }
 
 func main() {
-    text := "привет из go и gocpy"
+    text := "hello from go and gocpy"
     fmt.Println(textstat.Words(text), "of max", textstat.MaxWords)
     fmt.Println(textstat.Title(text))
     try {

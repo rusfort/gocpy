@@ -1,0 +1,134 @@
+package io
+
+// Buffer is a variable-sized buffer of bytes with Read and Write methods
+// (Go's bytes.Buffer). The zero value is an empty buffer ready to use.
+type Buffer struct {
+	buf []byte
+	off int
+}
+
+// NewBuffer returns a Buffer whose initial contents are data.
+func NewBuffer(data []byte) *Buffer {
+	return &Buffer{buf: data}
+}
+
+// NewBufferString returns a Buffer whose initial contents are s.
+func NewBufferString(s string) *Buffer {
+	return &Buffer{buf: []byte(s)}
+}
+
+// Len returns the number of unread bytes.
+func (b *Buffer) Len() int {
+	return len(b.buf) - b.off
+}
+
+// Bytes returns the unread part of the buffer.
+func (b *Buffer) Bytes() []byte {
+	return b.buf[b.off:]
+}
+
+// String returns the unread part as a string.
+func (b *Buffer) String() string {
+	return string(b.buf[b.off:])
+}
+
+// Reset empties the buffer.
+func (b *Buffer) Reset() {
+	b.buf = b.buf[:0]
+	b.off = 0
+}
+
+// Truncate keeps only the first n unread bytes.
+func (b *Buffer) Truncate(n int) {
+	if n == 0 {
+		b.Reset()
+		return
+	}
+	b.buf = b.buf[:b.off+n]
+}
+
+func (b *Buffer) compact() {
+	if b.off > 0 && b.off >= len(b.buf)/2 {
+		k := copyBytes(b.buf, b.buf[b.off:])
+		b.buf = b.buf[:k]
+		b.off = 0
+	}
+}
+
+// Write appends p.
+func (b *Buffer) Write(p []byte) (int, error) {
+	b.compact()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+// WriteString appends s.
+func (b *Buffer) WriteString(s string) (int, error) {
+	b.compact()
+	b.buf = append(b.buf, []byte(s)...)
+	return len(s), nil
+}
+
+// WriteByte appends c.
+func (b *Buffer) WriteByte(c byte) error {
+	b.buf = append(b.buf, c)
+	return nil
+}
+
+// WriteRune appends the UTF-8 encoding of r.
+func (b *Buffer) WriteRune(r rune) (int, error) {
+	return b.WriteString(string(r))
+}
+
+// Read reads up to len(p) bytes; an empty buffer returns EOF.
+func (b *Buffer) Read(p []byte) (int, error) {
+	if b.off >= len(b.buf) {
+		b.Reset()
+		if len(p) == 0 {
+			return 0, nil
+		}
+		return 0, EOF
+	}
+	k := copyBytes(p, b.buf[b.off:])
+	b.off += k
+	return k, nil
+}
+
+// ReadByte reads one byte.
+func (b *Buffer) ReadByte() (byte, error) {
+	if b.off >= len(b.buf) {
+		b.Reset()
+		return 0, EOF
+	}
+	c := b.buf[b.off]
+	b.off++
+	return c, nil
+}
+
+// ReadString reads until the first delim, including it.
+func (b *Buffer) ReadString(delim byte) (string, error) {
+	for i := b.off; i < len(b.buf); i++ {
+		if b.buf[i] == delim {
+			s := string(b.buf[b.off : i+1])
+			b.off = i + 1
+			return s, nil
+		}
+	}
+	s := string(b.buf[b.off:])
+	b.off = len(b.buf)
+	return s, EOF
+}
+
+// WriteTo writes the unread data to w.
+func (b *Buffer) WriteTo(w Writer) (int64, error) {
+	k, err := w.Write(b.buf[b.off:])
+	b.off += k
+	return int64(k), err
+}
+
+// ReadFrom reads from r until EOF and appends the data.
+func (b *Buffer) ReadFrom(r Reader) (int64, error) {
+	data, err := ReadAll(r)
+	b.Write(data)
+	return int64(len(data)), err
+}

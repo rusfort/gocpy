@@ -1,0 +1,628 @@
+package io
+
+import "std/errors"
+
+const defaultBufSize = 4096
+
+// ErrBufferFull is returned by Peek when n is larger than the buffer.
+var ErrBufferFull = errors.New("bufio: buffer full")
+
+// ErrInvalidUnreadByte is returned by UnreadByte without a preceding read.
+var ErrInvalidUnreadByte = errors.New("bufio: invalid use of UnreadByte")
+
+// ErrNegativeCount is returned for a negative count.
+var ErrNegativeCount = errors.New("bufio: negative count")
+
+// BufReader adds buffering to a Reader (Go's bufio.Reader).
+type BufReader struct {
+	rd       Reader
+	buf      []byte
+	r        int
+	w        int
+	err      error
+	lastByte int
+}
+
+// NewReader returns a BufReader with a 4096-byte buffer.
+func NewReader(rd Reader) *BufReader {
+	return NewReaderSize(rd, defaultBufSize)
+}
+
+// NewReaderSize returns a BufReader with a buffer of at least size bytes.
+func NewReaderSize(rd Reader, size int) *BufReader {
+	if size < 16 {
+		size = 16
+	}
+	return &BufReader{rd: rd, buf: make([]byte, size), lastByte: -1}
+}
+
+// fill reads a new chunk into the buffer.
+func (b *BufReader) fill() {
+	if b.r > 0 {
+		copyBytes(b.buf, b.buf[b.r:b.w])
+		b.w -= b.r
+		b.r = 0
+	}
+	for i := 0; i < 100; i++ {
+		k, err := b.rd.Read(b.buf[b.w:])
+		b.w += k
+		if err != nil {
+			b.err = err
+			return
+		}
+		if k > 0 {
+			return
+		}
+	}
+	b.err = ErrNoProgress
+}
+
+func (b *BufReader) readErr() error {
+	err := b.err
+	b.err = nil
+	return err
+}
+
+// Buffered returns the number of bytes that can be read from the buffer.
+func (b *BufReader) Buffered() int {
+	return b.w - b.r
+}
+
+// Read reads data into p.
+func (b *BufReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		if b.Buffered() > 0 {
+			return 0, nil
+		}
+		return 0, b.readErr()
+	}
+	if b.r == b.w {
+		if b.err != nil {
+			return 0, b.readErr()
+		}
+		if len(p) >= len(b.buf) {
+			// large read: bypass the buffer
+			k, err := b.rd.Read(p)
+			if k > 0 {
+				b.lastByte = int(p[k-1])
+			}
+			return k, err
+		}
+		b.r = 0
+		b.w = 0
+		b.fill()
+		if b.r == b.w {
+			return 0, b.readErr()
+		}
+	}
+	k := copyBytes(p, b.buf[b.r:b.w])
+	b.r += k
+	b.lastByte = int(b.buf[b.r-1])
+	return k, nil
+}
+
+// ReadByte reads one byte.
+func (b *BufReader) ReadByte() (byte, error) {
+	for b.r == b.w {
+		if b.err != nil {
+			return 0, b.readErr()
+		}
+		b.fill()
+	}
+	c := b.buf[b.r]
+	b.r++
+	b.lastByte = int(c)
+	return c, nil
+}
+
+// UnreadByte unreads the last byte read.
+func (b *BufReader) UnreadByte() error {
+	if b.lastByte < 0 || b.r == 0 {
+		return ErrInvalidUnreadByte
+	}
+	b.r--
+	b.buf[b.r] = byte(b.lastByte)
+	b.lastByte = -1
+	return nil
+}
+
+// ReadRune reads one UTF-8 encoded character and returns it and its size.
+// An invalid encoding gives U+FFFD and size 1.
+func (b *BufReader) ReadRune() (rune, int, error) {
+	for b.w-b.r < 4 && b.err == nil {
+		k := b.w - b.r
+		if k > 0 && runeLen(b.buf[b.r]) <= k {
+			break
+		}
+		b.fill()
+	}
+	if b.r == b.w {
+		return 0, 0, b.readErr()
+	}
+	c := b.buf[b.r]
+	size := runeLen(c)
+	if size > b.w-b.r {
+		size = 1
+	}
+	var r rune = 0xFFFD
+	if c < 0x80 {
+		r = rune(c)
+		size = 1
+	} else {
+		for i, ch in string(b.buf[b.r : b.r+size]) {
+			if i == 0 {
+				r = ch
+			}
+		}
+		if r == 0xFFFD {
+			size = 1
+		}
+	}
+	b.r += size
+	b.lastByte = int(b.buf[b.r-1])
+	return r, size, nil
+}
+
+func runeLen(c byte) int {
+	switch {
+	case c < 0x80:
+		return 1
+	case c>>5 == 6:
+		return 2
+	case c>>4 == 14:
+		return 3
+	case c>>3 == 30:
+		return 4
+	}
+	return 1
+}
+
+// Peek returns the next n bytes without advancing the reader.
+func (b *BufReader) Peek(n int) ([]byte, error) {
+	if n < 0 {
+		return nil, ErrNegativeCount
+	}
+	if n > len(b.buf) {
+		return b.buf[b.r:b.w], ErrBufferFull
+	}
+	for b.w-b.r < n && b.err == nil {
+		b.fill()
+	}
+	if b.w-b.r < n {
+		return b.buf[b.r:b.w], b.readErr()
+	}
+	return b.buf[b.r : b.r+n], nil
+}
+
+// Discard skips the next n bytes.
+func (b *BufReader) Discard(n int) (int, error) {
+	done := 0
+	for done < n {
+		if b.r == b.w {
+			if b.err != nil {
+				return done, b.readErr()
+			}
+			b.fill()
+			continue
+		}
+		k := b.w - b.r
+		if k > n-done {
+			k = n - done
+		}
+		b.r += k
+		done += k
+	}
+	return done, nil
+}
+
+// ReadBytes reads until the first delim and returns the data including it.
+// If the input ends first, it returns the data read and the error (often EOF).
+func (b *BufReader) ReadBytes(delim byte) ([]byte, error) {
+	var out []byte
+	for {
+		for i := b.r; i < b.w; i++ {
+			if b.buf[i] == delim {
+				out = append(out, b.buf[b.r:i+1]...)
+				b.r = i + 1
+				b.lastByte = int(delim)
+				return out, nil
+			}
+		}
+		out = append(out, b.buf[b.r:b.w]...)
+		b.r = b.w
+		if b.err != nil {
+			return out, b.readErr()
+		}
+		b.fill()
+	}
+}
+
+// ReadString is ReadBytes returning a string.
+func (b *BufReader) ReadString(delim byte) (string, error) {
+	data, err := b.ReadBytes(delim)
+	return string(data), err
+}
+
+// ReadLine reads a line without the trailing "\n" or "\r\n". At the end of
+// the input it returns "" and EOF.
+func (b *BufReader) ReadLine() (string, error) {
+	data, err := b.ReadBytes('\n')
+	if err != nil && (err != EOF || len(data) == 0) {
+		return string(data), err
+	}
+	k := len(data)
+	if k > 0 && data[k-1] == '\n' {
+		k--
+		if k > 0 && data[k-1] == '\r' {
+			k--
+		}
+	}
+	return string(data[:k]), nil
+}
+
+// WriteTo writes the remaining data to w (used by Copy-like helpers).
+func (b *BufReader) WriteTo(w Writer) (int64, error) {
+	var total int64 = 0
+	if b.r < b.w {
+		k, err := w.Write(b.buf[b.r:b.w])
+		total += int64(k)
+		b.r += k
+		if err != nil {
+			return total, err
+		}
+	}
+	more, err2 := Copy(w, b.rd)
+	return total + more, err2
+}
+
+// BufWriter adds buffering to a Writer (Go's bufio.Writer). Call Flush at
+// the end.
+type BufWriter struct {
+	wr  Writer
+	buf []byte
+	n   int
+	err error
+}
+
+// NewWriter returns a BufWriter with a 4096-byte buffer.
+func NewWriter(w Writer) *BufWriter {
+	return NewWriterSize(w, defaultBufSize)
+}
+
+// NewWriterSize returns a BufWriter with a buffer of at least size bytes.
+func NewWriterSize(w Writer, size int) *BufWriter {
+	if size < 16 {
+		size = 16
+	}
+	return &BufWriter{wr: w, buf: make([]byte, size)}
+}
+
+// Flush writes the buffered data to the underlying Writer.
+func (b *BufWriter) Flush() error {
+	if b.err != nil {
+		return b.err
+	}
+	if b.n == 0 {
+		return nil
+	}
+	k, err := b.wr.Write(b.buf[:b.n])
+	if k < b.n && err == nil {
+		err = ErrShortWrite
+	}
+	if err != nil {
+		if k > 0 && k < b.n {
+			copyBytes(b.buf, b.buf[k:b.n])
+		}
+		b.n -= k
+		b.err = err
+		return err
+	}
+	b.n = 0
+	return nil
+}
+
+// Available returns the free space in the buffer.
+func (b *BufWriter) Available() int {
+	return len(b.buf) - b.n
+}
+
+// Buffered returns the number of buffered bytes.
+func (b *BufWriter) Buffered() int {
+	return b.n
+}
+
+// Write writes p.
+func (b *BufWriter) Write(p []byte) (int, error) {
+	done := 0
+	for len(p)-done > b.Available() && b.err == nil {
+		k := 0
+		if b.n == 0 {
+			// large write with an empty buffer: write directly
+			k, b.err = b.wr.Write(p[done:])
+		} else {
+			k = copyBytes(b.buf[b.n:], p[done:])
+			b.n += k
+			b.Flush()
+		}
+		done += k
+	}
+	if b.err != nil {
+		return done, b.err
+	}
+	k := copyBytes(b.buf[b.n:], p[done:])
+	b.n += k
+	return done + k, nil
+}
+
+// WriteString writes s.
+func (b *BufWriter) WriteString(s string) (int, error) {
+	return b.Write([]byte(s))
+}
+
+// WriteByte writes one byte.
+func (b *BufWriter) WriteByte(c byte) error {
+	if b.err != nil {
+		return b.err
+	}
+	if b.Available() <= 0 && b.Flush() != nil {
+		return b.err
+	}
+	b.buf[b.n] = c
+	b.n++
+	return nil
+}
+
+// WriteRune writes the UTF-8 encoding of r.
+func (b *BufWriter) WriteRune(r rune) (int, error) {
+	return b.WriteString(string(r))
+}
+
+// SplitFunc splits the input of a Scanner into tokens; see ScanLines.
+type SplitFunc func(data []byte, atEOF bool) (advance int, token []byte, err error)
+
+// ErrTooLong is returned by Scanner when a token is longer than the limit.
+var ErrTooLong = errors.New("bufio.Scanner: token too long")
+
+// ErrNegativeAdvance is returned when a SplitFunc returns a negative advance.
+var ErrNegativeAdvance = errors.New("bufio.Scanner: SplitFunc returns negative advance count")
+
+// ErrAdvanceTooFar is returned when a SplitFunc advances past the input.
+var ErrAdvanceTooFar = errors.New("bufio.Scanner: SplitFunc returns advance count beyond input")
+
+// ErrFinalToken may be returned by a SplitFunc to stop after this token.
+var ErrFinalToken = errors.New("final token")
+
+// MaxScanTokenSize is the default maximum token size of a Scanner.
+const MaxScanTokenSize = 64 * 1024
+
+// Scanner reads input split into tokens: lines by default (Go's
+// bufio.Scanner).
+type Scanner struct {
+	r       Reader
+	split   SplitFunc
+	maxTok  int
+	buf     []byte
+	start   int
+	end     int
+	token   []byte
+	err     error
+	done    bool
+	empties int
+}
+
+// NewScanner returns a Scanner reading lines from r.
+func NewScanner(r Reader) *Scanner {
+	return &Scanner{r: r, split: ScanLines, maxTok: MaxScanTokenSize}
+}
+
+// Split sets the split function (ScanLines, ScanWords, ScanRunes,
+// ScanBytes or your own). Call it before Scan.
+func (s *Scanner) Split(split SplitFunc) {
+	s.split = split
+}
+
+// Buffer sets the initial buffer and the maximum token size.
+func (s *Scanner) Buffer(buf []byte, maxSize int) {
+	s.buf = buf[:cap(buf)]
+	s.maxTok = maxSize
+}
+
+// Err returns the first non-EOF error.
+func (s *Scanner) Err() error {
+	if s.err == EOF {
+		return nil
+	}
+	return s.err
+}
+
+// Bytes returns the last token; the data may be overwritten by Scan.
+func (s *Scanner) Bytes() []byte {
+	return s.token
+}
+
+// Text returns the last token as a string.
+func (s *Scanner) Text() string {
+	return string(s.token)
+}
+
+func (s *Scanner) fail(err error) bool {
+	if s.err == nil || s.err == EOF {
+		s.err = err
+	}
+	s.done = true
+	s.token = nil
+	return false
+}
+
+// Scan advances to the next token; it returns false at the end of the
+// input or on an error (see Err).
+func (s *Scanner) Scan() bool {
+	if s.done {
+		return false
+	}
+	for {
+		if s.end > s.start || s.err != nil {
+			adv, tok, err := s.split(s.buf[s.start:s.end], s.err != nil)
+			if err != nil {
+				if err == ErrFinalToken {
+					s.token = tok
+					s.done = true
+					return tok != nil
+				}
+				return s.fail(err)
+			}
+			if adv < 0 {
+				return s.fail(ErrNegativeAdvance)
+			}
+			if adv > s.end-s.start {
+				return s.fail(ErrAdvanceTooFar)
+			}
+			s.start += adv
+			if tok != nil {
+				s.token = tok
+				if adv > 0 {
+					s.empties = 0
+				} else {
+					s.empties++
+					if s.empties > 100 {
+						return s.fail(ErrNoProgress)
+					}
+				}
+				return true
+			}
+			if adv > 0 {
+				continue
+			}
+		}
+		if s.err != nil {
+			s.done = true
+			s.token = nil
+			return false
+		}
+		if s.start > 0 && (s.end == len(s.buf) || s.start > len(s.buf)/2) {
+			copyBytes(s.buf, s.buf[s.start:s.end])
+			s.end -= s.start
+			s.start = 0
+		}
+		if s.end == len(s.buf) {
+			if len(s.buf) >= s.maxTok {
+				return s.fail(ErrTooLong)
+			}
+			size := len(s.buf) * 2
+			if size == 0 {
+				size = 4096
+			}
+			if size > s.maxTok {
+				size = s.maxTok
+			}
+			nb := make([]byte, size)
+			copyBytes(nb, s.buf[s.start:s.end])
+			s.end -= s.start
+			s.start = 0
+			s.buf = nb
+		}
+		for loop := 0; ; loop++ {
+			k, err := s.r.Read(s.buf[s.end:])
+			s.end += k
+			if err != nil {
+				s.err = err
+				break
+			}
+			if k > 0 {
+				s.empties = 0
+				break
+			}
+			if loop > 100 {
+				s.err = ErrNoProgress
+				break
+			}
+		}
+	}
+}
+
+func dropCR(data []byte) []byte {
+	if len(data) > 0 && data[len(data)-1] == '\r' {
+		return data[:len(data)-1]
+	}
+	return data
+}
+
+// ScanLines splits into lines without the trailing "\n" or "\r\n". The
+// last line may have no newline.
+func ScanLines(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			return i + 1, dropCR(data[:i]), nil
+		}
+	}
+	if atEOF {
+		return len(data), dropCR(data), nil
+	}
+	return 0, nil, nil
+}
+
+func isSpaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
+
+// ScanWords splits into words separated by white space.
+func ScanWords(data []byte, atEOF bool) (int, []byte, error) {
+	start := 0
+	for start < len(data) && isSpaceByte(data[start]) {
+		start++
+	}
+	for i := start; i < len(data); i++ {
+		if isSpaceByte(data[i]) {
+			return i + 1, data[start:i], nil
+		}
+	}
+	if atEOF && len(data) > start {
+		return len(data), data[start:], nil
+	}
+	return start, nil, nil
+}
+
+// ScanBytes returns each byte as a token.
+func ScanBytes(data []byte, atEOF bool) (int, []byte, error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if len(data) == 0 {
+		return 0, nil, nil
+	}
+	return 1, data[:1], nil
+}
+
+// ScanRunes returns each UTF-8 character as a token; invalid bytes become
+// U+FFFD.
+func ScanRunes(data []byte, atEOF bool) (int, []byte, error) {
+	if len(data) == 0 {
+		return 0, nil, nil
+	}
+	size := runeLen(data[0])
+	if size > len(data) {
+		if !atEOF {
+			return 0, nil, nil
+		}
+		size = 1
+	}
+	if size == 1 {
+		if data[0] < 0x80 {
+			return 1, data[:1], nil
+		}
+		return 1, []byte("\uFFFD"), nil
+	}
+	valid := true
+	for i := 1; i < size; i++ {
+		if data[i]&0xC0 != 0x80 {
+			valid = false
+		}
+	}
+	if !valid {
+		return 1, []byte("\uFFFD"), nil
+	}
+	return size, data[:size], nil
+}

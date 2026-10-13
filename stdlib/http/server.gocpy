@@ -1,0 +1,640 @@
+package http
+
+import (
+	"std/errors"
+	"std/fmt"
+	"std/io"
+	"std/strconv"
+	"std/strings"
+	"std/sync"
+	"std/time"
+)
+
+// Handler responds to an HTTP request.
+type Handler interface {
+	ServeHTTP(w ResponseWriter, r *Request)
+}
+
+// HandlerFunc adapts a function to a Handler.
+type HandlerFunc func(w ResponseWriter, r *Request)
+
+// ServeHTTP calls f(w, r).
+func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+	f(w, r)
+}
+
+// ResponseWriter builds the response of a handler. Headers must be set
+// before the first Write or WriteHeader. The response is sent when the
+// handler returns, with Content-Length computed automatically.
+type ResponseWriter interface {
+	Header() Header
+	Write(p []byte) (int, error)
+	WriteHeader(statusCode int)
+}
+
+type response struct {
+	header      Header
+	status      int
+	wroteHeader bool
+	body        io.Buffer
+}
+
+func (w *response) Header() Header {
+	return w.header
+}
+
+func (w *response) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	if statusCode < 100 || statusCode > 999 {
+		statusCode = 500
+	}
+	w.wroteHeader = true
+	w.status = statusCode
+}
+
+func (w *response) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(StatusOK)
+	}
+	if w.status == 204 || w.status == 304 || (w.status >= 100 && w.status < 200) {
+		return 0, ErrBodyNotAllowed
+	}
+	return w.body.Write(p)
+}
+
+// WriteString writes s.
+func (w *response) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+// ErrBodyNotAllowed is returned when writing a body for a status that does
+// not allow one (204, 304, 1xx).
+var ErrBodyNotAllowed = errors.New("http: request method or response status code does not allow body")
+
+// ErrServerClosed is returned by Serve and ListenAndServe after Close.
+var ErrServerClosed = errors.New("http: Server closed")
+
+// Error replies with the status code and a plain-text message.
+func Error(w ResponseWriter, msg string, code int) {
+	h := w.Header()
+	h.Del("Content-Length")
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	fmt.Fprintln(w, msg)
+}
+
+// NotFound replies with 404 page not found.
+func NotFound(w ResponseWriter, r *Request) {
+	Error(w, "404 page not found", StatusNotFound)
+}
+
+// NotFoundHandler returns a handler that replies 404.
+func NotFoundHandler() Handler {
+	return HandlerFunc(NotFound)
+}
+
+func htmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&#34;")
+	return strings.ReplaceAll(s, "'", "&#39;")
+}
+
+// Redirect replies with a redirect to target (absolute or relative to the
+// request path).
+func Redirect(w ResponseWriter, r *Request, target string, code int) {
+	if !strings.Contains(target, "://") && !strings.HasPrefix(target, "/") && r.URL != nil {
+		dir := r.URL.Path
+		if i := strings.LastIndex(dir, "/"); i >= 0 {
+			dir = dir[:i+1]
+		}
+		target = cleanPath(dir + target)
+	}
+	h := w.Header()
+	h.Set("Location", target)
+	if r.Method == MethodGet || r.Method == MethodHead {
+		h.Set("Content-Type", "text/html; charset=utf-8")
+	}
+	w.WriteHeader(code)
+	if r.Method == MethodGet {
+		fmt.Fprintf(w, "<a href=\"%s\">%s</a>.\n", htmlEscape(target), StatusText(code))
+	}
+}
+
+// RedirectHandler returns a handler that redirects every request.
+func RedirectHandler(target string, code int) Handler {
+	return HandlerFunc(func(w ResponseWriter, r *Request) {
+		Redirect(w, r, target, code)
+	})
+}
+
+// StripPrefix serves requests by removing prefix from the path and calling h.
+func StripPrefix(prefix string, h Handler) Handler {
+	return HandlerFunc(func(w ResponseWriter, r *Request) {
+		p, found := strings.CutPrefix(r.URL.Path, prefix)
+		if !found {
+			NotFound(w, r)
+			return
+		}
+		u2 := *r.URL
+		u2.Path = p
+		u2.RawPath = ""
+		r2 := *r
+		r2.URL = &u2
+		h.ServeHTTP(w, &r2)
+	})
+}
+
+// ServeFile replies with the contents of the file or directory listing.
+func ServeFile(w ResponseWriter, r *Request, name string) {
+	info, err := io.Stat(name)
+	if err != nil {
+		if io.IsNotExist(err) {
+			NotFound(w, r)
+		} else if io.IsPermission(err) {
+			Error(w, "403 Forbidden", StatusForbidden)
+		} else {
+			Error(w, "500 Internal Server Error", StatusInternalServerError)
+		}
+		return
+	}
+	if info.IsDir() {
+		if r.URL != nil && !strings.HasSuffix(r.URL.Path, "/") {
+			localRedirect(w, baseName(r.URL.Path)+"/")
+			return
+		}
+		index := name + "/index.html"
+		if io.Exists(index) {
+			name = index
+		} else {
+			entries, derr := io.ReadDir(name)
+			if derr != nil {
+				Error(w, "500 Internal Server Error", StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			io.WriteString(w, "<!doctype html>\n<pre>\n")
+			for e in entries {
+				n := e.Name()
+				if e.IsDir() {
+					n = n + "/"
+				}
+				fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", htmlEscape(PathEscape(strings.TrimSuffix(n, "/"))+strings.Repeat("/", len(n)-len(strings.TrimSuffix(n, "/")))), htmlEscape(n))
+			}
+			io.WriteString(w, "</pre>\n")
+			return
+		}
+	}
+	data, rerr := io.ReadFile(name)
+	if rerr != nil {
+		Error(w, "500 Internal Server Error", StatusInternalServerError)
+		return
+	}
+	h := w.Header()
+	if h.Get("Content-Type") == "" {
+		ct := contentTypeByExt(name)
+		if ct == "" {
+			ct = DetectContentType(data)
+		}
+		h.Set("Content-Type", ct)
+	}
+	fi, _ := io.Stat(name)
+	h.Set("Last-Modified", FormatTime(fi.ModTime()))
+	w.Write(data)
+}
+
+// localRedirect redirects to a path relative to the current one (works
+// behind StripPrefix).
+func localRedirect(w ResponseWriter, target string) {
+	w.Header().Set("Location", target)
+	w.WriteHeader(StatusMovedPermanently)
+}
+
+func baseName(p string) string {
+	p = strings.TrimSuffix(p, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+type fileServer struct {
+	root string
+}
+
+func (f *fileServer) ServeHTTP(w ResponseWriter, r *Request) {
+	if r.Method != MethodGet && r.Method != MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		Error(w, "405 method not allowed", StatusMethodNotAllowed)
+		return
+	}
+	p := cleanPath(r.URL.Path)
+	if strings.HasSuffix(r.URL.Path, "/") && !strings.HasSuffix(p, "/") {
+		p = p + "/"
+	}
+	if strings.HasSuffix(p, "/index.html") {
+		localRedirect(w, "./")
+		return
+	}
+	ServeFile(w, r, f.root+strings.TrimSuffix(p, "/"))
+}
+
+// FileServer returns a handler that serves files from the directory root;
+// paths cannot leave root.
+func FileServer(root string) Handler {
+	return &fileServer{root: strings.TrimSuffix(root, "/")}
+}
+
+// ---------------------------------------------------------------- ServeMux
+
+type route struct {
+	pattern string
+	method  string
+	segs    []string
+	subtree bool
+	handler Handler
+}
+
+// ServeMux routes requests by pattern, as in Go 1.22:
+//
+//	"/static/"          the subtree under /static/
+//	"/about"            exactly /about
+//	"GET /users/{id}"   method and a wildcard (r.PathValue("id"))
+//	"/files/{path...}"  a wildcard for the rest of the path
+//	"/{$}"              exactly /
+//
+// The most specific pattern wins; a GET pattern also serves HEAD.
+type ServeMux struct {
+	mu     sync.Mutex
+	routes []*route
+}
+
+// NewServeMux returns an empty ServeMux.
+func NewServeMux() *ServeMux {
+	return &ServeMux{}
+}
+
+// DefaultServeMux is used by Handle, HandleFunc and a nil handler.
+var DefaultServeMux = NewServeMux()
+
+// Handle registers h for pattern (a later registration replaces an
+// identical pattern).
+func (mux *ServeMux) Handle(pattern string, h Handler) {
+	rt := &route{pattern: pattern, handler: h}
+	p := strings.TrimSpace(pattern)
+	if sp := strings.IndexByte(p, ' '); sp >= 0 {
+		rt.method = strings.ToUpper(p[:sp])
+		p = strings.TrimSpace(p[sp+1:])
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	exactRoot := strings.HasSuffix(p, "/{$}")
+	if exactRoot {
+		p = strings.TrimSuffix(p, "{$}")
+	}
+	rt.subtree = strings.HasSuffix(p, "/") && !exactRoot
+	for seg in strings.Split(strings.Trim(p, "/"), "/") {
+		if seg != "" {
+			rt.segs = append(rt.segs, seg)
+		}
+	}
+	if exactRoot {
+		rt.segs = append(rt.segs, "")
+	}
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+	for i, old in mux.routes {
+		if old.pattern == pattern {
+			mux.routes[i] = rt
+			return
+		}
+	}
+	mux.routes = append(mux.routes, rt)
+}
+
+// HandleFunc registers a handler function for pattern.
+func (mux *ServeMux) HandleFunc(pattern string, f func(w ResponseWriter, r *Request)) {
+	mux.Handle(pattern, HandlerFunc(f))
+}
+
+// match returns the score of the route for path (-1 if it does not match)
+// and the wildcard values.
+func (rt *route) match(path string) (int, map[string]string) {
+	var parts []string
+	trimmed := strings.TrimPrefix(path, "/")
+	if trimmed != "" {
+		parts = strings.Split(trimmed, "/")
+	}
+	vars := map[string]string{}
+	score := 0
+	for i, seg in rt.segs {
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "...}") {
+			vars[seg[1:len(seg)-4]] = strings.Join(parts[i:], "/")
+			return score + 1, vars
+		}
+		if seg == "" {
+			// "{$}": the path must end here with a slash
+			if i == len(parts) || (i == len(parts)-1 && parts[i] == "") {
+				return score + 1000, vars
+			}
+			return -1, vars
+		}
+		if i >= len(parts) {
+			return -1, vars
+		}
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			if parts[i] == "" {
+				return -1, vars
+			}
+			v, err := PathUnescape(parts[i])
+			if err != nil {
+				v = parts[i]
+			}
+			vars[seg[1:len(seg)-1]] = v
+			score += 10
+			continue
+		}
+		if seg != parts[i] {
+			return -1, vars
+		}
+		score += 100
+	}
+	if rt.subtree {
+		if len(parts) == len(rt.segs) && !strings.HasSuffix(path, "/") && len(rt.segs) > 0 {
+			return -1, vars // "/dir" against "/dir/": redirected by ServeHTTP
+		}
+		return score, vars
+	}
+	if len(parts) != len(rt.segs) {
+		return -1, vars
+	}
+	return score + 1, vars
+}
+
+// Handler returns the handler for the request and the matched pattern.
+func (mux *ServeMux) Handler(r *Request) (Handler, string) {
+	h, pattern, _ := mux.find(r)
+	return h, pattern
+}
+
+func (mux *ServeMux) find(r *Request) (Handler, string, map[string]string) {
+	mux.mu.Lock()
+	routes := mux.routes
+	mux.mu.Unlock()
+	path := "/"
+	if r.URL != nil && r.URL.Path != "" {
+		path = r.URL.Path
+	}
+	var best *route = nil
+	bestScore := -1
+	var bestVars map[string]string = nil
+	var allowed []string
+	for rt in routes {
+		sc, vars := rt.match(path)
+		if sc < 0 {
+			continue
+		}
+		if rt.method != "" {
+			if rt.method != r.Method && !(rt.method == MethodGet && r.Method == MethodHead) {
+				allowed = append(allowed, rt.method)
+				continue
+			}
+			sc += 5
+		}
+		if sc > bestScore {
+			best = rt
+			bestScore = sc
+			bestVars = vars
+		}
+	}
+	if best != nil {
+		return best.handler, best.pattern, bestVars
+	}
+	for rt in routes {
+		if rt.subtree && len(rt.segs) > 0 {
+			sc, _ := rt.match(path + "/")
+			if sc >= 0 && (rt.method == "" || rt.method == r.Method) {
+				target := path + "/"
+				if r.URL != nil && r.URL.RawQuery != "" {
+					target = target + "?" + r.URL.RawQuery
+				}
+				return RedirectHandler(target, StatusMovedPermanently), rt.pattern, nil
+			}
+		}
+	}
+	if len(allowed) > 0 {
+		allow := strings.Join(allowed, ", ")
+		return HandlerFunc(func(w ResponseWriter, req *Request) {
+			w.Header().Set("Allow", allow)
+			Error(w, "405 method not allowed", StatusMethodNotAllowed)
+		}), "", nil
+	}
+	return NotFoundHandler(), "", nil
+}
+
+// ServeHTTP dispatches the request to the best matching handler.
+func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
+	h, _, vars := mux.find(r)
+	for k, v in vars {
+		r.SetPathValue(k, v)
+	}
+	h.ServeHTTP(w, r)
+}
+
+// Handle registers h in DefaultServeMux.
+func Handle(pattern string, h Handler) {
+	DefaultServeMux.Handle(pattern, h)
+}
+
+// HandleFunc registers f in DefaultServeMux.
+func HandleFunc(pattern string, f func(w ResponseWriter, r *Request)) {
+	DefaultServeMux.HandleFunc(pattern, f)
+}
+
+// ---------------------------------------------------------------- Server
+
+// Server is an HTTP/1.1 server. Every connection is served by its own
+// goroutine; keep-alive is supported.
+type Server struct {
+	Addr         string        // ":8080" if empty
+	Handler      Handler       // DefaultServeMux if nil
+	ReadTimeout  time.Duration // limit for reading a request (0: none)
+	WriteTimeout time.Duration // limit for writing a response (0: none)
+	IdleTimeout  time.Duration // keep-alive wait for the next request (0: 2 minutes)
+	mu           sync.Mutex
+	listener     *Listener
+	closed       bool
+}
+
+// ListenAndServe listens on addr and serves requests with handler (nil:
+// DefaultServeMux). It returns only on an error.
+func ListenAndServe(addr string, handler Handler) error {
+	srv := &Server{Addr: addr, Handler: handler}
+	return srv.ListenAndServe()
+}
+
+// Serve accepts connections on l and serves them with handler.
+func Serve(l *Listener, handler Handler) error {
+	srv := &Server{Handler: handler}
+	return srv.Serve(l)
+}
+
+// ListenAndServe listens on s.Addr and calls Serve.
+func (s *Server) ListenAndServe() error {
+	addr := s.Addr
+	if addr == "" {
+		addr = ":8080"
+	}
+	l := Listen(addr)?
+	return s.Serve(l)
+}
+
+// Serve accepts connections on l until Close. It returns ErrServerClosed
+// after Close.
+func (s *Server) Serve(l *Listener) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		l.Close()
+		return ErrServerClosed
+	}
+	s.listener = l
+	s.mu.Unlock()
+	failures := 0
+	for {
+		fd, err := l.accept()
+		if err != nil {
+			if l.isClosed() || s.isClosed() {
+				return ErrServerClosed
+			}
+			failures++
+			if failures > 100 {
+				return err
+			}
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		failures = 0
+		go s.serveConn(fd)
+	}
+}
+
+func (s *Server) isClosed() bool {
+	s.mu.Lock()
+	c := s.closed
+	s.mu.Unlock()
+	return c
+}
+
+// Close stops the listener; connections being served finish their current
+// request.
+func (s *Server) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	l := s.listener
+	s.mu.Unlock()
+	if l != nil {
+		return l.Close()
+	}
+	return nil
+}
+
+func (s *Server) handler() Handler {
+	if s.Handler == nil {
+		return DefaultServeMux
+	}
+	return s.Handler
+}
+
+func (s *Server) serveConn(fd int) {
+	conn := &tcpConn{fd: fd}
+	defer conn.Close()
+	remote := joinHostPort(sockIP(fd, true), sockPort(fd, true))
+	br := io.NewReader(conn)
+	idle := s.IdleTimeout
+	if idle <= 0 {
+		idle = 2 * time.Minute
+	}
+	first := true
+	for !s.isClosed() {
+		wait := idle
+		if first && s.ReadTimeout > 0 {
+			wait = s.ReadTimeout
+		}
+		first = false
+		setTimeout(fd, msOf(wait), msOf(s.WriteTimeout))
+		req, err := readRequest(br, conn)
+		if err != nil {
+			if err == ErrMalformed || err == ErrBodyTooLarge || err == io.ErrUnexpectedEOF {
+				code := StatusBadRequest
+				if err == ErrBodyTooLarge {
+					code = StatusRequestEntityTooLarge
+				}
+				msg := strconv.Itoa(code) + " " + StatusText(code)
+				io.WriteString(conn, "HTTP/1.1 "+msg+"\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\nContent-Length: "+strconv.Itoa(len(msg)+1)+"\r\n\r\n"+msg+"\n")
+			}
+			return
+		}
+		req.RemoteAddr = remote
+		w := &response{header: Header{}}
+		s.handler().ServeHTTP(w, req)
+		keep := wantsKeepAlive(req) && !strings.EqualFold(w.header.Get("Connection"), "close") && !s.isClosed()
+		writeResponse(conn, req, w, keep)
+		if !keep {
+			return
+		}
+	}
+}
+
+func wantsKeepAlive(r *Request) bool {
+	c := strings.ToLower(r.Header.Get("Connection"))
+	if r.Proto == "HTTP/1.0" {
+		return strings.Contains(c, "keep-alive")
+	}
+	return !strings.Contains(c, "close")
+}
+
+func writeResponse(conn *tcpConn, req *Request, w *response, keep bool) {
+	if !w.wroteHeader {
+		w.WriteHeader(StatusOK)
+	}
+	code := w.status
+	body := w.body.Bytes()
+	h := w.header
+	noBody := code == 204 || code == 304 || (code >= 100 && code < 200)
+	if !noBody {
+		if !h.Has("Content-Type") && len(body) > 0 {
+			h.Set("Content-Type", DetectContentType(body))
+		}
+		h.Set("Content-Length", strconv.Itoa(len(body)))
+	} else {
+		h.Del("Content-Length")
+	}
+	h.Del("Transfer-Encoding")
+	if !h.Has("Date") {
+		h.Set("Date", nowHTTP())
+	}
+	if !keep {
+		h.Set("Connection", "close")
+	} else if req.Proto == "HTTP/1.0" {
+		h.Set("Connection", "keep-alive")
+	}
+	var b strings.Builder
+	text := StatusText(code)
+	if text == "" {
+		text = "status code " + strconv.Itoa(code)
+	}
+	b.WriteString("HTTP/1.1 " + strconv.Itoa(code) + " " + text + "\r\n")
+	h.writeTo(&b)
+	b.WriteString("\r\n")
+	out := []byte(b.String())
+	if req.Method != MethodHead && !noBody {
+		out = append(out, body...)
+	}
+	conn.Write(out)
+}

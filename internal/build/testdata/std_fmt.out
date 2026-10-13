@@ -1,0 +1,23 @@
+42|   42|42   |-0042|+42|ff|FF|0xff|10|101|G|'x'|U+1F600
+3.141590|3.14|   3.142|1.234568e+03|1.2e-05|2.5|1E+21
+go|     right|left      |tru|"a\"b\n"|6869|68 69
+true|{1 2}|main.Point|float64|string
+[1 2 3]|bytes|[4 5]
+21.5°C|-3.0°C|  2.2
+%!d(string=str) %!s(int=5)|%!d(MISSING)
+100%|   7|1  |
+[10.0°C] [     pad] 20
+a 1 2.5 true
+load: not found: config.yml
+true true
+as: config.yml
+first
+wrapped: sentinel
+true false
+5 <nil> x=10;end 1
+ab1 2
+3 <nil> Alice 30 1.75
+2 <nil> 10 20
+0 expected integer
+0 EOF
+0 unsigned integer overflow on token 300

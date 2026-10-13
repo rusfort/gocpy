@@ -570,6 +570,7 @@ func init() {
 	}
 	initStd()
 	initErrors()
+	initFmtLib()
 	initGenerics()
 }
 

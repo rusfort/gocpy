@@ -1,0 +1,90 @@
+package main
+
+import (
+	"std/errors"
+	"std/fmt"
+	"std/io"
+	"std/strings"
+)
+
+func main() {
+	dir, err := io.MkdirTemp("", "gocpy-io-*")
+	if err != nil {
+		fmt.Println("mkdirtemp:", err)
+		return
+	}
+	defer io.RemoveAll(dir)
+	p := dir + "/a.txt"
+	err = io.WriteFile(p, []byte("line1\nline2\r\nlast"), 0o644)
+	fmt.Println("write:", err)
+	data, rerr := io.ReadFile(p)
+	fmt.Printf("%q %v\n", string(data), rerr)
+	f, oerr := io.Open(p)
+	fmt.Println(oerr == nil)
+	sc := io.NewScanner(f)
+	for sc.Scan() {
+		fmt.Printf("[%s]", sc.Text())
+	}
+	fmt.Println(sc.Err())
+	f.Close()
+	fmt.Println(strings.ReplaceAll(f.Close().Error(), dir, "$DIR"))
+	_, err = io.Open(dir + "/missing")
+	fmt.Println(strings.ReplaceAll(err.Error(), dir, "$DIR"), io.IsNotExist(err), errors.Is(err, io.ErrNotExist))
+	var pe *io.PathError
+	if errors.As(err, &pe) {
+		fmt.Println("op:", pe.Op)
+	}
+	err = io.AppendFile(p, []byte("\nmore"), 0o644)
+	info, serr := io.Stat(p)
+	fmt.Println(err, serr, info.Name(), info.Size(), info.IsDir(), info.Mode() == 0o644)
+	fmt.Println(io.MkdirAll(dir+"/x/y/z", 0o755))
+	fmt.Println(io.WriteFile(dir+"/x/b.txt", []byte("b"), 0o600))
+	entries, derr := io.ReadDir(dir + "/x")
+	for e in entries {
+		fmt.Print(e.Name(), ":", e.IsDir(), " ")
+	}
+	fmt.Println(derr)
+	fmt.Println(io.Rename(dir+"/x/b.txt", dir+"/x/c.txt"), io.Exists(dir+"/x/c.txt"), io.Exists(dir+"/x/b.txt"))
+	rmErr := io.Remove(dir + "/x")
+	fmt.Println(strings.ReplaceAll(rmErr.Error(), dir, "$DIR"), io.IsExist(rmErr))
+	g, cerr := io.Create(dir + "/seek.bin")
+	g.WriteString("0123456789")
+	off, _ := g.Seek(3, io.SeekStart)
+	buf := make([]byte, 4)
+	k, _ := g.Read(buf)
+	fmt.Println(cerr, off, k, string(buf[:k]))
+	g.Close()
+	r := io.NewReader(strings.NewReader("alpha beta\ngamma\n"))
+	w1, e1 := r.ReadString(' ')
+	l2, e2 := r.ReadLine()
+	l3, e3 := r.ReadLine()
+	l4, e4 := r.ReadLine()
+	fmt.Printf("%q %v %q %v %q %v %q %v\n", w1, e1, l2, e2, l3, e3, l4, e4)
+	var b io.Buffer
+	b.WriteString("hello ")
+	fmt.Fprintf(&b, "%d world", 42)
+	bw := io.NewWriter(io.Stdout)
+	bw.WriteString("buffered: " + b.String() + "\n")
+	bw.Flush()
+	all, aerr := io.ReadAll(io.MultiReader(strings.NewReader("ab"), strings.NewReader("cd")))
+	fmt.Println(string(all), aerr)
+	full := make([]byte, 10)
+	nf, ferr := io.ReadFull(strings.NewReader("short"), full)
+	fmt.Println(nf, ferr)
+	ws := io.NewScanner(strings.NewReader("  one two\tthree\n four "))
+	ws.Split(io.ScanWords)
+	cnt := 0
+	for ws.Scan() {
+		cnt++
+		fmt.Print(ws.Text(), ",")
+	}
+	fmt.Println(cnt)
+	n64, cpe := io.Copy(io.Stdout, strings.NewReader("copied\n"))
+	fmt.Println(n64, cpe)
+	fmt.Fprintln(io.Discard, "discarded")
+	tf, terr := io.CreateTemp(dir, "t-*.txt")
+	fmt.Println(terr, strings.HasPrefix(tf.Name(), dir+"/t-"), strings.HasSuffix(tf.Name(), ".txt"))
+	tf.Close()
+	io.RemoveAll(dir)
+	fmt.Println(io.Exists(dir))
+}

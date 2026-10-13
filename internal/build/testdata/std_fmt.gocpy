@@ -1,0 +1,82 @@
+package main
+
+import (
+	"std/errors"
+	"std/fmt"
+)
+
+type Point struct {
+	X int
+	Y int
+}
+
+type Celsius float64
+
+func (c Celsius) String() string {
+	return fmt.Sprintf("%.1f°C", float64(c))
+}
+
+type NotFound struct {
+	Name string
+}
+
+func (e *NotFound) Error() string {
+	return "not found: " + e.Name
+}
+
+type Buf struct {
+	data []byte
+}
+
+func (b *Buf) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+func main() {
+	fmt.Printf("%d|%5d|%-5d|%05d|%+d|%x|%X|%#x|%o|%b|%c|%q|%U\n", 42, 42, 42, -42, 42, 255, 255, 255, 8, 5, 'G', 'x', 0x1F600)
+	fmt.Printf("%f|%.2f|%8.3f|%e|%g|%v|%G\n", 3.14159, 3.14159, 3.14159, 1234.5678, 0.000012, 2.5, 1e21)
+	fmt.Printf("%s|%10s|%-10s|%.3s|%q|%x|% x\n", "go", "right", "left", "truncate", "a\"b\n", "hi", "hi")
+	fmt.Printf("%t|%v|%T|%T|%T\n", true, Point{1, 2}, Point{}, 3.5, "s")
+	fmt.Printf("%v|%s|%d\n", []int{1, 2, 3}, []byte("bytes"), []int{4, 5})
+	fmt.Printf("%v|%s|%5.1f\n", Celsius(21.5), Celsius(-3), 2.25)
+	fmt.Printf("%d %s|%d\n", "str", 5)
+	fmt.Printf("100%%|%*d|%-*d|\n", 4, 7, 3, 1)
+	var c fmt.Stringer = Celsius(10)
+	s := fmt.Sprintf("[%v] [%8v]", c, "pad")
+	fmt.Println(s, len(s))
+	fmt.Print(fmt.Sprintln("a", 1, 2.5, true))
+	base := &NotFound{Name: "config.yml"}
+	err := fmt.Errorf("load: %w", base)
+	fmt.Println(err)
+	fmt.Println(errors.Is(err, base), errors.Unwrap(err) == base)
+	var nf *NotFound
+	if errors.As(err, &nf) {
+		fmt.Println("as:", nf.Name)
+	}
+	sentinel := errors.New("sentinel")
+	j := errors.Join(errors.New("first"), fmt.Errorf("wrapped: %w", sentinel))
+	fmt.Println(j)
+	fmt.Println(errors.Is(j, sentinel), errors.Is(j, base))
+	var b Buf
+	n, e := fmt.Fprintf(&b, "%s=%d;", "x", 10)
+	fmt.Fprintln(&b, "end", 1)
+	fmt.Fprint(&b, "a", "b", 1, 2)
+	fmt.Println(n, e, string(b.data))
+	var name string
+	var age int
+	var h float64
+	cnt, serr := fmt.Sscan("Alice 30 1.75", &name, &age, &h)
+	fmt.Println(cnt, serr, name, age, h)
+	var a1 int
+	var a2 int
+	cnt, serr = fmt.Sscanf("10-20", "%d-%d", &a1, &a2)
+	fmt.Println(cnt, serr, a1, a2)
+	cnt, serr = fmt.Sscan("abc", &a1)
+	fmt.Println(cnt, serr)
+	cnt, serr = fmt.Sscan("", &a1)
+	fmt.Println(cnt, serr)
+	var u8 uint8
+	cnt, serr = fmt.Sscan("300", &u8)
+	fmt.Println(cnt, serr)
+}

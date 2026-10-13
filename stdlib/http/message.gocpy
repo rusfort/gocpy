@@ -1,0 +1,307 @@
+package http
+
+import (
+	"std/errors"
+	"std/io"
+	"std/strconv"
+	"std/strings"
+)
+
+// MaxHeaderBytes limits the size of the header block of a message.
+const MaxHeaderBytes = 1 << 20
+
+// MaxBodyBytes limits the size of a message body read into memory.
+const MaxBodyBytes = 1 << 30
+
+// ErrBodyTooLarge is returned when a body exceeds MaxBodyBytes.
+var ErrBodyTooLarge = errors.New("http: body too large")
+
+// ErrMalformed is returned for a message that cannot be parsed.
+var ErrMalformed = errors.New("http: malformed message")
+
+// Request is an HTTP request received by a server or sent by a client.
+type Request struct {
+	Method        string
+	URL           *URL
+	Proto         string // "HTTP/1.1"
+	Header        Header
+	Body          io.ReadCloser // never nil on the server side
+	ContentLength int64
+	Host          string
+	RemoteAddr    string // "ip:port" of the client (server side)
+	RequestURI    string // the request target as received (server side)
+	Form          Values // URL query and form body, after ParseForm
+	PostForm      Values // form body only, after ParseForm
+	pathVars      map[string]string
+	bodyData      []byte
+	hasBody       bool
+}
+
+// NewRequest creates a client request. body may be nil.
+func NewRequest(method string, rawURL string, body io.Reader) (*Request, error) {
+	if method == "" {
+		method = MethodGet
+	}
+	u := ParseURL(rawURL)?
+	r := &Request{Method: strings.ToUpper(method), URL: u, Proto: "HTTP/1.1", Header: Header{}, Host: u.Host}
+	if body != nil {
+		data := io.ReadAll(body)?
+		r.bodyData = data
+		r.hasBody = true
+		r.ContentLength = int64(len(data))
+		r.Body = io.NopCloser(io.NewBuffer(data))
+	}
+	return r, nil
+}
+
+// PathValue returns the value of the {name} wildcard of the ServeMux
+// pattern that matched the request.
+func (r *Request) PathValue(name string) string {
+	if r.pathVars == nil {
+		return ""
+	}
+	return r.pathVars[name]
+}
+
+// SetPathValue sets a wildcard value (for tests and middleware).
+func (r *Request) SetPathValue(name string, value string) {
+	if r.pathVars == nil {
+		r.pathVars = map[string]string{}
+	}
+	r.pathVars[name] = value
+}
+
+// UserAgent returns the User-Agent header.
+func (r *Request) UserAgent() string {
+	return r.Header.Get("User-Agent")
+}
+
+// ParseForm fills Form (query and body) and PostForm (body of POST, PUT
+// and PATCH requests with Content-Type application/x-www-form-urlencoded).
+func (r *Request) ParseForm() error {
+	if r.Form != nil {
+		return nil
+	}
+	var firstErr error = nil
+	r.PostForm = Values{}
+	if r.Method == MethodPost || r.Method == MethodPut || r.Method == MethodPatch {
+		ct := r.Header.Get("Content-Type")
+		if i := strings.IndexByte(ct, ';'); i >= 0 {
+			ct = ct[:i]
+		}
+		if strings.TrimSpace(strings.ToLower(ct)) == "application/x-www-form-urlencoded" && r.Body != nil {
+			data, rerr := io.ReadAll(r.Body)
+			if rerr != nil {
+				firstErr = rerr
+			}
+			pf, perr := ParseQuery(string(data))
+			if perr != nil && firstErr == nil {
+				firstErr = perr
+			}
+			r.PostForm = pf
+		}
+	}
+	form := Values{}
+	for k, vs in r.PostForm {
+		for v in vs {
+			form.Add(k, v)
+		}
+	}
+	if r.URL != nil {
+		q, qerr := ParseQuery(r.URL.RawQuery)
+		if qerr != nil && firstErr == nil {
+			firstErr = qerr
+		}
+		for k, vs in q {
+			for v in vs {
+				form.Add(k, v)
+			}
+		}
+	}
+	r.Form = form
+	return firstErr
+}
+
+// FormValue returns the first value for key from the body form or the
+// URL query.
+func (r *Request) FormValue(key string) string {
+	r.ParseForm()
+	return r.Form.Get(key)
+}
+
+// PostFormValue returns the first value for key from the body form.
+func (r *Request) PostFormValue(key string) string {
+	r.ParseForm()
+	return r.PostForm.Get(key)
+}
+
+// Response is an HTTP response received by a client.
+type Response struct {
+	Status        string // "200 OK"
+	StatusCode    int
+	Proto         string
+	Header        Header
+	Body          io.ReadCloser // the whole body, already received
+	ContentLength int64
+	Request       *Request
+}
+
+// readHeaders reads header lines up to the empty line.
+func readHeaders(br *io.BufReader) (Header, error) {
+	h := Header{}
+	total := 0
+	for {
+		line, err := br.ReadLine()
+		if err != nil {
+			if err == io.EOF {
+				return h, io.ErrUnexpectedEOF
+			}
+			return h, err
+		}
+		total += len(line)
+		if total > MaxHeaderBytes {
+			return h, errors.New("http: header too large")
+		}
+		if line == "" {
+			return h, nil
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok || k == "" || strings.ContainsAny(k, " \t") {
+			return h, ErrMalformed
+		}
+		h.Add(k, strings.TrimSpace(v))
+	}
+}
+
+func readChunked(br *io.BufReader) ([]byte, error) {
+	var out []byte
+	for {
+		line := br.ReadLine()?
+		if i := strings.IndexByte(line, ';'); i >= 0 {
+			line = line[:i]
+		}
+		size, perr := strconv.ParseInt(strings.TrimSpace(line), 16, 64)
+		if perr != nil || size < 0 {
+			return out, ErrMalformed
+		}
+		if size == 0 {
+			for {
+				trailer := br.ReadLine()?
+				if trailer == "" {
+					return out, nil
+				}
+			}
+		}
+		if int64(len(out))+size > MaxBodyBytes {
+			return out, ErrBodyTooLarge
+		}
+		chunk := make([]byte, size)
+		io.ReadFull(br, chunk)?
+		out = append(out, chunk...)
+		crlf := br.ReadLine()?
+		if crlf != "" {
+			return out, ErrMalformed
+		}
+	}
+}
+
+// readBody reads a message body framed by Transfer-Encoding or
+// Content-Length; untilEOF reads to the end of the connection otherwise.
+func readBody(br *io.BufReader, h Header, untilEOF bool) ([]byte, error) {
+	te := strings.ToLower(h.Get("Transfer-Encoding"))
+	if strings.Contains(te, "chunked") {
+		return readChunked(br)
+	}
+	if cl := h.Get("Content-Length"); cl != "" {
+		size, err := strconv.ParseInt(strings.TrimSpace(cl), 10, 64)
+		if err != nil || size < 0 {
+			return nil, ErrMalformed
+		}
+		if size > MaxBodyBytes {
+			return nil, ErrBodyTooLarge
+		}
+		data := make([]byte, size)
+		k, rerr := io.ReadFull(br, data)
+		if rerr != nil {
+			return data[:k], io.ErrUnexpectedEOF
+		}
+		return data, nil
+	}
+	if untilEOF {
+		return io.ReadAll(br)
+	}
+	return nil, nil
+}
+
+func splitProto(line string) (string, string, string, bool) {
+	a, rest, ok1 := strings.Cut(line, " ")
+	b, c, ok2 := strings.Cut(rest, " ")
+	return a, b, c, ok1 && ok2
+}
+
+// readRequest reads one request from a server connection; continueW
+// receives "100 Continue" when the client asks for it.
+func readRequest(br *io.BufReader, continueW io.Writer) (*Request, error) {
+	line := ""
+	for line == "" {
+		l, err := br.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		line = l
+	}
+	method, target, proto, ok := splitProto(line)
+	if !ok || !strings.HasPrefix(proto, "HTTP/1.") || method == "" {
+		return nil, ErrMalformed
+	}
+	h := readHeaders(br)?
+	u, uerr := ParseURL(target)
+	if uerr != nil {
+		return nil, ErrMalformed
+	}
+	r := &Request{Method: method, URL: u, Proto: proto, Header: h, RequestURI: target, Host: h.Get("Host")}
+	if r.Host == "" {
+		r.Host = u.Host
+	}
+	if strings.EqualFold(h.Get("Expect"), "100-continue") && (h.Get("Content-Length") != "" || h.Get("Transfer-Encoding") != "") {
+		io.WriteString(continueW, "HTTP/1.1 100 Continue\r\n\r\n")
+	}
+	data := readBody(br, h, false)?
+	r.ContentLength = int64(len(data))
+	r.bodyData = data
+	r.Body = io.NopCloser(io.NewBuffer(data))
+	return r, nil
+}
+
+// readResponse reads a response from a client connection.
+func readResponse(br *io.BufReader, req *Request) (*Response, error) {
+	for {
+		line := br.ReadLine()?
+		proto, code, text, ok := splitProto(line + " ")
+		if !ok || !strings.HasPrefix(proto, "HTTP/") {
+			return nil, errors.New("http: malformed status line " + strconv.Quote(line))
+		}
+		status, cerr := strconv.Atoi(code)
+		if cerr != nil || status < 100 || status > 999 {
+			return nil, errors.New("http: malformed status code " + strconv.Quote(code))
+		}
+		h := readHeaders(br)?
+		if status >= 100 && status < 200 && status != 101 {
+			continue // 100 Continue, 103 Early Hints
+		}
+		resp := &Response{Status: strings.TrimSpace(code + " " + text), StatusCode: status, Proto: proto, Header: h, Request: req}
+		var data []byte
+		if req.Method != MethodHead && status != 204 && status != 304 {
+			data = readBody(br, h, true)?
+		}
+		resp.ContentLength = int64(len(data))
+		if req.Method == MethodHead {
+			resp.ContentLength = -1
+			if cl, clerr := strconv.ParseInt(h.Get("Content-Length"), 10, 64); clerr == nil {
+				resp.ContentLength = cl
+			}
+		}
+		resp.Body = io.NopCloser(io.NewBuffer(data))
+		return resp, nil
+	}
+}

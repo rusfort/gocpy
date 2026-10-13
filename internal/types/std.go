@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rusfort/gocpy/internal/token"
+	"github.com/rusfort/gocpy/stdlib"
 )
 
 // StdMembers holds non-builtin members of std packages: types, functions
@@ -18,6 +19,7 @@ func StdList() string {
 	for p := range StdPackages {
 		ps = append(ps, p)
 	}
+	ps = append(ps, stdlib.Packages()...)
 	sort.Strings(ps)
 	return strings.Join(ps, ", ")
 }
@@ -69,6 +71,59 @@ func initStd() {
 	tm["Sleep"] = stdFunc("Sleep", "gocpy_sleep", param(dur), nil)
 	tm["Since"] = stdFunc("Since", "gocpy_since", param(Typ[Int64]), []*Var{NewVar("", dur, token.Pos{})})
 	tm["Now"] = stdFunc("Now", "gocpy_now", nil, []*Var{NewVar("", Typ[Int64], token.Pos{})})
+	tm["UnixNano"] = stdFunc("UnixNano", "gocpy_unix_nano", nil, []*Var{NewVar("", Typ[Int64], token.Pos{})})
 	StdPackages["std/time"] = map[string]BuiltinID{}
 	StdMembers["std/time"] = tm
+}
+
+// initFmtLib declares the fmt functions implemented in gocpy_lib.c (the
+// Printf and Scan families) and fmt.Stringer.
+func initFmtLib() {
+	pos := token.Pos{}
+	v := func(name string, t Type) *Var { return NewVar(name, t, pos) }
+	bytesT := &Slice{Elem: Typ[Uint8]}
+	anys := v("a", &Slice{Elem: AnyType})
+	intErr := []*Var{v("n", Typ[Int]), v("err", ErrorType)}
+	rw := func(name string) *Interface {
+		return &Interface{Methods: []*IMethod{{Name: name, Sig: &Signature{
+			Params: []*Var{v("p", bytesT)}, Results: intErr}}}}
+	}
+	writer, reader := rw("Write"), rw("Read")
+	vf := func(name, cname string, params []*Var, results []*Var) *Func {
+		f := stdFunc(name, cname, append(params, anys), results)
+		f.Sig().Variadic = true
+		return f
+	}
+	str := []*Var{v("", Typ[String])}
+	m := map[string]Object{
+		"Printf":   vf("Printf", "gocpy_fmt_printf", []*Var{v("format", Typ[String])}, intErr),
+		"Sprintf":  vf("Sprintf", "gocpy_fmt_sprintf", []*Var{v("format", Typ[String])}, str),
+		"Sprintln": vf("Sprintln", "gocpy_fmt_sprintln", nil, str),
+		"Errorf":   vf("Errorf", "gocpy_fmt_errorf", []*Var{v("format", Typ[String])}, []*Var{v("", ErrorType)}),
+		"Fprint":   vf("Fprint", "gocpy_fmt_fprint", []*Var{v("w", writer)}, intErr),
+		"Fprintln": vf("Fprintln", "gocpy_fmt_fprintln", []*Var{v("w", writer)}, intErr),
+		"Fprintf":  vf("Fprintf", "gocpy_fmt_fprintf", []*Var{v("w", writer), v("format", Typ[String])}, intErr),
+		"Scan":     vf("Scan", "gocpy_fmt_scan", nil, intErr),
+		"Scanln":   vf("Scanln", "gocpy_fmt_scanln", nil, intErr),
+		"Scanf":    vf("Scanf", "gocpy_fmt_scanf", []*Var{v("format", Typ[String])}, intErr),
+		"Sscan":    vf("Sscan", "gocpy_fmt_sscan", []*Var{v("str", Typ[String])}, intErr),
+		"Sscanln":  vf("Sscanln", "gocpy_fmt_sscanln", []*Var{v("str", Typ[String])}, intErr),
+		"Sscanf":   vf("Sscanf", "gocpy_fmt_sscanf", []*Var{v("str", Typ[String]), v("format", Typ[String])}, intErr),
+		"Fscan":    vf("Fscan", "gocpy_fmt_fscan", []*Var{v("r", reader)}, intErr),
+		"Fscanln":  vf("Fscanln", "gocpy_fmt_fscanln", []*Var{v("r", reader)}, intErr),
+		"Fscanf":   vf("Fscanf", "gocpy_fmt_fscanf", []*Var{v("r", reader), v("format", Typ[String])}, intErr),
+	}
+	stringer := stdType("fmt", "Stringer", "gocpy_iface", &Interface{Methods: []*IMethod{{Name: "String",
+		Sig: &Signature{Results: str}}}})
+	m["Stringer"] = stringer.Obj
+	StdMembers["std/fmt"] = m
+
+	e := StdMembers["std/errors"]
+	errT := []*Var{v("", ErrorType)}
+	e["Is"] = stdFunc("Is", "gocpy_errors_is", []*Var{v("err", ErrorType), v("target", ErrorType)}, []*Var{v("", Typ[Bool])})
+	e["As"] = stdFunc("As", "gocpy_errors_as", []*Var{v("err", ErrorType), v("target", AnyType)}, []*Var{v("", Typ[Bool])})
+	e["Unwrap"] = stdFunc("Unwrap", "gocpy_errors_unwrap", []*Var{v("err", ErrorType)}, errT)
+	join := stdFunc("Join", "gocpy_errors_join", []*Var{v("errs", &Slice{Elem: ErrorType})}, errT)
+	join.Sig().Variadic = true
+	e["Join"] = join
 }

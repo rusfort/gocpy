@@ -3,6 +3,7 @@ package build
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -265,10 +266,12 @@ func Build(target string, opts Options) (*Result, error) {
 	base = append(base, mod.Build.Flags...)
 
 	type cunit struct {
-		src   string
-		flags []string
+		src     string
+		flags   []string
+		runtime bool // the embedded C runtime: the object file is cached
 	}
-	units := []cunit{{src: filepath.Join(work, "gocpy_rt.c"), flags: []string{fmt.Sprintf("-O%d", opt)}}}
+	units := []cunit{{src: filepath.Join(work, "gocpy_rt.c"), flags: []string{fmt.Sprintf("-O%d", opt)}, runtime: true},
+		{src: filepath.Join(work, "gocpy_lib.c"), flags: []string{fmt.Sprintf("-O%d", opt)}, runtime: true}}
 	for _, u := range out.Units {
 		fl := []string{fmt.Sprintf("-O%d", opt)}
 		if u.Source != "" {
@@ -307,8 +310,17 @@ func Build(target string, opts Options) (*Result, error) {
 	for i, u := range units {
 		obj := filepath.Join(work, fmt.Sprintf("u%d_%s.o", i, strings.TrimSuffix(filepath.Base(u.src), ".c")))
 		args := append(append(append([]string{}, base...), u.flags...), "-c", u.src, "-o", obj)
+		if u.runtime {
+			if cached, ok := runtimeObject(cc, args, work, u.src, obj, opts); ok {
+				objs = append(objs, cached)
+				continue
+			}
+		}
 		if err := run(cc, args, opts); err != nil {
 			return nil, err
+		}
+		if u.runtime {
+			storeRuntimeObject(cc, args, work, u.src, obj)
 		}
 		objs = append(objs, obj)
 	}
@@ -360,6 +372,73 @@ func loadFileConfig(src string) (*FileConfig, error) {
 		return nil, fmt.Errorf("%s: file: %s does not match %s", p, fc.File, filepath.Base(src))
 	}
 	return fc, nil
+}
+
+// runtimeObjectPath returns the cache path of the object file of a runtime
+// source compiled with the given compiler and arguments.
+func runtimeObjectPath(cc string, args []string, work, src string) string {
+	dir := os.Getenv("GOCPY_CACHE")
+	if dir == "" {
+		d, err := os.UserCacheDir()
+		if err != nil {
+			return ""
+		}
+		dir = filepath.Join(d, "gocpy")
+	}
+	h := sha256.New()
+	ccPath, err := exec.LookPath(cc)
+	if err != nil {
+		return ""
+	}
+	fmt.Fprintf(h, "%s\n", ccPath)
+	if st, err := os.Stat(ccPath); err == nil {
+		fmt.Fprintf(h, "%d %d\n", st.Size(), st.ModTime().UnixNano())
+	}
+	for _, a := range args {
+		fmt.Fprintf(h, "%s\x00", strings.ReplaceAll(a, work, "$WORK"))
+	}
+	for _, f := range []string{filepath.Join(work, "gocpy_rt.h"), src} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return ""
+		}
+		h.Write(data)
+	}
+	return filepath.Join(dir, "rt", fmt.Sprintf("%x.o", h.Sum(nil)[:16]))
+}
+
+func runtimeObject(cc string, args []string, work, src, obj string, opts Options) (string, bool) {
+	p := runtimeObjectPath(cc, args, work, src)
+	if p == "" {
+		return "", false
+	}
+	if _, err := os.Stat(p); err != nil {
+		return "", false
+	}
+	if opts.Verbose {
+		opts.logf("using cached %s\n", p)
+	}
+	return p, true
+}
+
+func storeRuntimeObject(cc string, args []string, work, src, obj string) {
+	p := runtimeObjectPath(cc, args, work, src)
+	if p == "" || os.MkdirAll(filepath.Dir(p), 0o755) != nil {
+		return
+	}
+	data, err := os.ReadFile(obj)
+	if err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(p), "obj-*")
+	if err != nil {
+		return
+	}
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil || os.Rename(tmp.Name(), p) != nil {
+		os.Remove(tmp.Name())
+	}
 }
 
 func run(cc string, args []string, opts Options) error {

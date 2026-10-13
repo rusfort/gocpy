@@ -1,0 +1,472 @@
+package http
+
+import (
+	"std/errors"
+	"std/strconv"
+	"std/strings"
+)
+
+// URLError reports an error and the operation and URL that caused it
+// (Go's url.Error); client errors have this type too.
+type URLError struct {
+	Op  string
+	URL string
+	Err error
+}
+
+func (e *URLError) Error() string {
+	return e.Op + " " + strconv.Quote(e.URL) + ": " + e.Err.Error()
+}
+
+func (e *URLError) Unwrap() error {
+	return e.Err
+}
+
+// URL is a parsed URL: scheme://user@host/path?query#fragment.
+type URL struct {
+	Scheme   string
+	User     string // userinfo ("user" or "user:password"), without "@"
+	Host     string // "host" or "host:port"
+	Path     string // decoded path
+	RawPath  string // encoded path as it appeared in the input
+	RawQuery string // encoded query, without "?"
+	Fragment string
+}
+
+func isSchemeChar(c byte, first bool) bool {
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+		return true
+	}
+	return !first && ((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.')
+}
+
+// ParseURL parses an absolute URL ("http://host/path?q") or a path with an
+// optional query ("/path?q").
+func ParseURL(raw string) (*URL, error) {
+	u := &URL{}
+	rest := raw
+	if i := strings.IndexByte(rest, '#'); i >= 0 {
+		frag, ferr := PathUnescape(rest[i+1:])
+		if ferr != nil {
+			return nil, &URLError{Op: "parse", URL: raw, Err: ferr}
+		}
+		u.Fragment = frag
+		rest = rest[:i]
+	}
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		if c == ':' && i > 0 {
+			u.Scheme = strings.ToLower(rest[:i])
+			rest = rest[i+1:]
+			break
+		}
+		if !isSchemeChar(c, i == 0) {
+			break
+		}
+	}
+	if q := strings.IndexByte(rest, '?'); q >= 0 {
+		u.RawQuery = rest[q+1:]
+		rest = rest[:q]
+	}
+	if strings.HasPrefix(rest, "//") {
+		auth := rest[2:]
+		rest = ""
+		if j := strings.IndexByte(auth, '/'); j >= 0 {
+			rest = auth[j:]
+			auth = auth[:j]
+		}
+		if at := strings.LastIndex(auth, "@"); at >= 0 {
+			u.User = auth[:at]
+			auth = auth[at+1:]
+		}
+		if strings.ContainsAny(auth, " \t\r\n") {
+			return nil, &URLError{Op: "parse", URL: raw, Err: errors.New("invalid character in host name")}
+		}
+		u.Host = auth
+	} else if u.Scheme != "" && !strings.HasPrefix(rest, "/") && rest != "" {
+		// opaque form such as mailto:x@y
+		u.Path = rest
+		return u, nil
+	}
+	p, perr := PathUnescape(rest)
+	if perr != nil {
+		return nil, &URLError{Op: "parse", URL: raw, Err: perr}
+	}
+	u.Path = p
+	if escapePath(p) != rest {
+		u.RawPath = rest
+	}
+	return u, nil
+}
+
+// Hostname returns the host without the port and IPv6 brackets.
+func (u *URL) Hostname() string {
+	host, _ := splitHostPortStr(u.Host)
+	return host
+}
+
+// Port returns the port part of Host, or "".
+func (u *URL) Port() string {
+	_, port := splitHostPortStr(u.Host)
+	return port
+}
+
+func splitHostPortStr(hostport string) (string, string) {
+	if strings.HasPrefix(hostport, "[") {
+		end := strings.IndexByte(hostport, ']')
+		if end < 0 {
+			return hostport, ""
+		}
+		if end+1 < len(hostport) && hostport[end+1] == ':' {
+			return hostport[1:end], hostport[end+2:]
+		}
+		return hostport[1:end], ""
+	}
+	i := strings.LastIndex(hostport, ":")
+	if i < 0 || strings.Count(hostport, ":") > 1 {
+		return hostport, ""
+	}
+	return hostport[:i], hostport[i+1:]
+}
+
+// EscapedPath returns the encoded path.
+func (u *URL) EscapedPath() string {
+	if u.RawPath != "" {
+		return u.RawPath
+	}
+	return escapePath(u.Path)
+}
+
+// RequestURI returns the encoded path?query used in an HTTP request line.
+func (u *URL) RequestURI() string {
+	p := u.EscapedPath()
+	if p == "" {
+		p = "/"
+	}
+	if u.RawQuery != "" {
+		p = p + "?" + u.RawQuery
+	}
+	return p
+}
+
+// Query parses RawQuery; malformed pairs are skipped.
+func (u *URL) Query() Values {
+	v, _ := ParseQuery(u.RawQuery)
+	return v
+}
+
+// String reassembles the URL.
+func (u *URL) String() string {
+	var b strings.Builder
+	if u.Scheme != "" {
+		b.WriteString(u.Scheme)
+		b.WriteString(":")
+	}
+	if u.Host != "" || u.Scheme == "http" || u.Scheme == "https" {
+		b.WriteString("//")
+		if u.User != "" {
+			b.WriteString(u.User)
+			b.WriteString("@")
+		}
+		b.WriteString(u.Host)
+	}
+	p := u.EscapedPath()
+	if p != "" && p[0] != '/' && u.Host != "" {
+		b.WriteString("/")
+	}
+	b.WriteString(p)
+	if u.RawQuery != "" {
+		b.WriteString("?")
+		b.WriteString(u.RawQuery)
+	}
+	if u.Fragment != "" {
+		b.WriteString("#")
+		b.WriteString(escapeWith(u.Fragment, false, true))
+	}
+	return b.String()
+}
+
+// ResolveReference resolves ref (absolute, "//host/x", "/abs" or
+// "relative") against u, as a browser does for links and redirects.
+func (u *URL) ResolveReference(ref string) (*URL, error) {
+	r := ParseURL(ref)?
+	if r.Scheme != "" {
+		return r, nil
+	}
+	out := &URL{Scheme: u.Scheme, User: u.User, Host: u.Host, RawQuery: r.RawQuery, Fragment: r.Fragment}
+	if strings.HasPrefix(ref, "//") {
+		out.Host = r.Host
+		out.User = r.User
+		out.Path = r.Path
+		return out, nil
+	}
+	if r.Path == "" {
+		out.Path = u.Path
+		if r.RawQuery == "" {
+			out.RawQuery = u.RawQuery
+		}
+		return out, nil
+	}
+	if strings.HasPrefix(r.Path, "/") {
+		out.Path = cleanPath(r.Path)
+		return out, nil
+	}
+	dir := u.Path
+	if i := strings.LastIndex(dir, "/"); i >= 0 {
+		dir = dir[:i+1]
+	} else {
+		dir = "/"
+	}
+	out.Path = cleanPath(dir + r.Path)
+	return out, nil
+}
+
+// cleanPath resolves "." and ".." segments of a rooted path; the result
+// never leaves the root.
+func cleanPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	var parts []string
+	for seg in strings.Split(p, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if seg == ".." {
+			if len(parts) > 0 {
+				parts = parts[:len(parts)-1]
+			}
+			continue
+		}
+		parts = append(parts, seg)
+	}
+	out := "/" + strings.Join(parts, "/")
+	if strings.HasSuffix(p, "/") && out != "/" {
+		out = out + "/"
+	}
+	if (strings.HasSuffix(p, "/.") || strings.HasSuffix(p, "/..")) && out != "/" {
+		out = out + "/"
+	}
+	return out
+}
+
+const upperHex = "0123456789ABCDEF"
+
+func shouldEscape(c byte, inPath bool, inFragment bool) bool {
+	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+		return false
+	}
+	switch c {
+	case '-', '_', '.', '~':
+		return false
+	case '$', '&', '+', ',', '/', ':', ';', '=', '@':
+		return !inPath && !inFragment
+	case '!', '(', ')', '*':
+		return !inFragment && !inPath
+	case '?':
+		return !inFragment
+	}
+	return true
+}
+
+func escapeWith(s string, inPath bool, inFragment bool) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if shouldEscape(c, inPath, inFragment) {
+			b.WriteByte('%')
+			b.WriteByte(upperHex[c>>4])
+			b.WriteByte(upperHex[c&15])
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func escapePath(p string) string {
+	return escapeWith(p, true, false)
+}
+
+// QueryEscape escapes s for a query parameter (spaces become "+").
+func QueryEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' {
+			b.WriteByte('+')
+		} else if shouldEscape(c, false, false) {
+			b.WriteByte('%')
+			b.WriteByte(upperHex[c>>4])
+			b.WriteByte(upperHex[c&15])
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// PathEscape escapes s for one path segment ("/" is escaped too).
+func PathEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '/' || c == ';' || c == ',' || c == '?' || shouldEscape(c, true, false) {
+			b.WriteByte('%')
+			b.WriteByte(upperHex[c>>4])
+			b.WriteByte(upperHex[c&15])
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func unhex(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+func unescape(s string, plusSpace bool) (string, error) {
+	if !strings.ContainsAny(s, "%+") {
+		return s, nil
+	}
+	var out []byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '%' {
+			if i+2 >= len(s) || unhex(s[i+1]) < 0 || unhex(s[i+2]) < 0 {
+				bad := s[i:]
+				if len(bad) > 3 {
+					bad = bad[:3]
+				}
+				return "", errors.New("invalid URL escape " + strconv.Quote(bad))
+			}
+			out = append(out, byte(unhex(s[i+1])*16+unhex(s[i+2])))
+			i += 2
+		} else if c == '+' && plusSpace {
+			out = append(out, ' ')
+		} else {
+			out = append(out, c)
+		}
+	}
+	return string(out), nil
+}
+
+// QueryUnescape decodes %XX escapes and "+" as a space.
+func QueryUnescape(s string) (string, error) {
+	return unescape(s, true)
+}
+
+// PathUnescape decodes %XX escapes ("+" stays "+").
+func PathUnescape(s string) (string, error) {
+	return unescape(s, false)
+}
+
+// Values maps a query or form key to its values.
+type Values map[string][]string
+
+// Get returns the first value for key, or "".
+func (v Values) Get(key string) string {
+	vs, ok := v[key]
+	if !ok || len(vs) == 0 {
+		return ""
+	}
+	return vs[0]
+}
+
+// Set replaces the values for key.
+func (v Values) Set(key string, value string) {
+	v[key] = []string{value}
+}
+
+// Add appends a value for key.
+func (v Values) Add(key string, value string) {
+	v[key] = append(v[key], value)
+}
+
+// Del removes key.
+func (v Values) Del(key string) {
+	delete(v, key)
+}
+
+// Has reports whether key is present.
+func (v Values) Has(key string) bool {
+	_, ok := v[key]
+	return ok
+}
+
+func sortStrings(a []string) {
+	for i := 1; i < len(a); i++ {
+		x := a[i]
+		j := i - 1
+		for j >= 0 && a[j] > x {
+			a[j+1] = a[j]
+			j--
+		}
+		a[j+1] = x
+	}
+}
+
+// Encode returns "a=1&b=2" with keys sorted.
+func (v Values) Encode() string {
+	var keys []string
+	for k, _ in v {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	var b strings.Builder
+	for k in keys {
+		for val in v[k] {
+			if b.Len() > 0 {
+				b.WriteByte('&')
+			}
+			b.WriteString(QueryEscape(k))
+			b.WriteByte('=')
+			b.WriteString(QueryEscape(val))
+		}
+	}
+	return b.String()
+}
+
+// ParseQuery parses "a=1&b=2"; it returns the first decoding error but
+// keeps the valid pairs.
+func ParseQuery(query string) (Values, error) {
+	v := Values{}
+	var firstErr error = nil
+	for part in strings.Split(query, "&") {
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, ";") {
+			if firstErr == nil {
+				firstErr = errors.New("invalid semicolon separator in query")
+			}
+			continue
+		}
+		key, value, _ := strings.Cut(part, "=")
+		k, kerr := QueryUnescape(key)
+		if kerr != nil {
+			if firstErr == nil {
+				firstErr = kerr
+			}
+			continue
+		}
+		val, verr := QueryUnescape(value)
+		if verr != nil {
+			if firstErr == nil {
+				firstErr = verr
+			}
+			continue
+		}
+		v.Add(k, val)
+	}
+	return v, firstErr
+}

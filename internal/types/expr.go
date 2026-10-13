@@ -231,10 +231,11 @@ func (c *checker) basicLit(e *ast.BasicLit) *operand {
 	case token.STRING:
 		k, t = gotoken.STRING, Typ[UntypedString]
 	}
-	v := constant.MakeFromLiteral(strings.ReplaceAll(e.Value, "_", ""), k, 0)
-	if e.Kind == token.STRING {
-		v = constant.MakeFromLiteral(e.Value, k, 0)
+	lit := e.Value
+	if e.Kind == token.INT || e.Kind == token.FLOAT {
+		lit = strings.ReplaceAll(lit, "_", "") // digit separators
 	}
+	v := constant.MakeFromLiteral(lit, k, 0)
 	if v.Kind() == constant.Unknown {
 		c.errorf(e.Pos(), "malformed literal %s", e.Value)
 		return c.invalid(e)

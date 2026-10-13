@@ -1,0 +1,46 @@
+package main
+
+import (
+	"std/errors"
+	"std/fmt"
+	"std/strconv"
+)
+
+func main() {
+	n, err := strconv.Atoi("123")
+	fmt.Println(n, err)
+	n, err = strconv.Atoi("12a")
+	fmt.Println(n, err)
+	v, err2 := strconv.ParseInt("-0x1F", 0, 64)
+	fmt.Println(v, err2)
+	v, err2 = strconv.ParseInt("300", 10, 8)
+	fmt.Println(v, err2, errors.Is(err2, strconv.ErrRange))
+	v, err2 = strconv.ParseInt("-9223372036854775808", 10, 64)
+	fmt.Println(v, err2)
+	v, err2 = strconv.ParseInt("9223372036854775808", 10, 64)
+	fmt.Println(v, err2)
+	u, err3 := strconv.ParseUint("18446744073709551615", 10, 64)
+	fmt.Println(u, err3)
+	v, err2 = strconv.ParseInt("1_000_000", 0, 64)
+	fmt.Println(v, err2)
+	fmt.Println(strconv.Itoa(-45), strconv.FormatInt(255, 16), strconv.FormatInt(-8, 2), strconv.FormatUint(18446744073709551615, 36))
+	f, err4 := strconv.ParseFloat("3.25", 64)
+	fmt.Println(f, err4)
+	f, err4 = strconv.ParseFloat("1e400", 64)
+	fmt.Println(f, err4)
+	f, err4 = strconv.ParseFloat("abc", 64)
+	fmt.Println(f, err4)
+	f, err4 = strconv.ParseFloat("0x1p-2", 64)
+	fmt.Println(f, err4)
+	fmt.Println(strconv.FormatFloat(3.14159, 'f', 2, 64), strconv.FormatFloat(1.0/3.0, 'g', -1, 64), strconv.FormatFloat(1e21, 'g', -1, 64), strconv.FormatFloat(123456789.0, 'g', -1, 64))
+	fmt.Println(strconv.FormatFloat(0.1, 'f', -1, 32), strconv.FormatFloat(100, 'e', -1, 64), strconv.FormatFloat(0.000012, 'f', -1, 64), strconv.FormatFloat(1.5, 'g', 5, 64), strconv.FormatFloat(100000, 'g', -1, 64))
+	b, err5 := strconv.ParseBool("True")
+	fmt.Println(b, err5, strconv.FormatBool(false))
+	fmt.Println(strconv.Quote("hi\n\"x\""), strconv.QuoteRune('ж'))
+	s, err6 := strconv.Unquote("\"a\\tb\\u0436\\x41\"")
+	fmt.Println(s, err6)
+	s, err6 = strconv.Unquote("'x'")
+	fmt.Println(s, err6)
+	s, err6 = strconv.Unquote("`raw\\n`")
+	fmt.Println(s, err6)
+}

@@ -1,0 +1,141 @@
+package main
+
+import (
+	"std/fmt"
+	"std/http"
+	"std/io"
+	"std/strings"
+	"std/time"
+	"std/udp"
+)
+
+func hello(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "hello, %s", r.FormValue("name"))
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", hello)
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "{\"id\": %q}", r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write(data)
+	})
+	mux.HandleFunc("/old", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/hello?name=redirected", http.StatusFound)
+	})
+	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "static:"+r.URL.Path)
+	})
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<!doctype html><p>root</p>")
+	})
+	l, err := http.Listen("127.0.0.1:0")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	srv := &http.Server{Handler: mux}
+	done := make(chan error)
+	go func() {
+		done <- srv.Serve(l)
+	}()
+	base := fmt.Sprintf("http://127.0.0.1:%d", l.Port())
+	resp, gerr := http.Get(base + "/hello?name=Gocpy")
+	if gerr != nil {
+		fmt.Println("get:", gerr)
+		return
+	}
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, resp.Status, string(body), resp.Header.Get("Content-Type"), resp.ContentLength)
+	resp, gerr = http.Get(base + "/users/42")
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body), resp.Header.Get("content-type"))
+	resp, gerr = http.Post(base+"/echo", "text/plain", strings.NewReader("ping-pong"))
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body))
+	resp, gerr = http.Get(base + "/echo")
+	fmt.Println(resp.StatusCode, resp.Header.Get("Allow"))
+	resp, gerr = http.Get(base + "/old")
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body), resp.Request.URL.String() == base+"/hello?name=redirected")
+	resp, gerr = http.Get(base + "/static")
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body))
+	resp, gerr = http.Get(base + "/nope")
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Printf("%d %q\n", resp.StatusCode, string(body))
+	resp, gerr = http.Get(base + "/")
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body), resp.Header.Get("Content-Type"))
+	form := http.Values{}
+	form.Set("name", "форма & co")
+	resp, gerr = http.PostForm(base+"/hello", form)
+	body, _ = io.ReadAll(resp.Body)
+	fmt.Println(resp.StatusCode, string(body))
+	resp, gerr = http.Head(base + "/hello?name=x")
+	fmt.Println(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Length"))
+	_, gerr = http.Get("https://example.com/")
+	fmt.Println(gerr)
+	_, gerr = http.Get("http://127.0.0.1:1/")
+	fmt.Println(gerr)
+	u, _ := http.ParseURL("http://user@example.com:8080/a%20b/c?x=1&y=%D0%B6#frag")
+	fmt.Println(u.Scheme, u.Host, u.Hostname(), u.Port(), u.Path, u.RawQuery, u.Fragment, u.Query().Get("y"), u.String())
+	fmt.Println(http.QueryEscape("a b&c=d/ж"), http.StatusText(404), http.CanonicalHeaderKey("x-forwarded-for"))
+	fmt.Println(http.FormatTime(0), http.FormatTime(1700000000000000000))
+	srv.Close()
+	fmt.Println(<-done)
+	udpEcho()
+}
+
+func udpServer(c *udp.Conn, done chan bool) {
+	buf := make([]byte, 1500)
+	for {
+		n, from, err := c.ReadFrom(buf)
+		if err != nil {
+			fmt.Println("server stop:", err)
+			done <- true
+			return
+		}
+		c.WriteTo([]byte("echo:"+string(buf[:n])), from)
+	}
+}
+
+func udpEcho() {
+	srv, err := udp.Listen("127.0.0.1:0")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	port := srv.LocalAddr().Port
+	fmt.Println(srv.LocalAddr().IP, port > 0)
+	done := make(chan bool)
+	go udpServer(srv, done)
+	cl, derr := udp.Dial(fmt.Sprintf("127.0.0.1:%d", port))
+	fmt.Println(derr)
+	cl.SetReadTimeout(5 * time.Second)
+	for i := 0; i < 3; i++ {
+		cl.Write([]byte(fmt.Sprintf("ping %d", i)))
+		buf := make([]byte, 100)
+		n, rerr := cl.Read(buf)
+		fmt.Println(string(buf[:n]), rerr)
+	}
+	fmt.Println(cl.RemoteAddr().String() == fmt.Sprintf("127.0.0.1:%d", port))
+	other, _ := udp.Listen("127.0.0.1:0")
+	other.SetReadTimeout(50 * time.Millisecond)
+	buf := make([]byte, 10)
+	_, _, terr := other.ReadFrom(buf)
+	var ue *udp.Error = terr.(*udp.Error)
+	fmt.Println(ue.Op, ue.Timeout(), io.IsTimeout(terr))
+	_, perr := udp.Listen("127.0.0.1")
+	fmt.Println(perr)
+	srv.Close()
+	fmt.Println("stopped:", <-done)
+	other.Close()
+	cl.Close()
+	fmt.Println(cl.Close())
+}

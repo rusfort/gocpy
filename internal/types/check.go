@@ -957,7 +957,11 @@ func (c *checker) valueSpec(scope *Scope, s *ast.ValueSpec, isConst, global bool
 				c.errorf(s.Pos(), "assignment mismatch: %d variables but %d values", len(s.Names), len(s.Values))
 			}
 			for _, v := range s.Values {
-				vals = append(vals, c.expr(v))
+				if isConst {
+					vals = append(vals, c.expr(v))
+				} else {
+					vals = append(vals, c.value(v))
+				}
 			}
 		}
 	} else if isConst {

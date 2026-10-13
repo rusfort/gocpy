@@ -1,0 +1,404 @@
+package http
+
+import (
+	"std/strconv"
+	"std/strings"
+	"std/time"
+)
+
+// Header holds the header fields of a request or response. Keys are
+// canonical ("Content-Type"); use Get and Set for case-insensitive access.
+type Header map[string][]string
+
+// CanonicalHeaderKey returns the canonical form of a header key:
+// "content-type" becomes "Content-Type".
+func CanonicalHeaderKey(s string) string {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == ':' || c == '\t' || c >= 0x80 {
+			return s
+		}
+	}
+	b := []byte(s)
+	upper := true
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if upper && c >= 'a' && c <= 'z' {
+			b[i] = c - 32
+		} else if !upper && c >= 'A' && c <= 'Z' {
+			b[i] = c + 32
+		}
+		upper = c == '-'
+	}
+	return string(b)
+}
+
+// Get returns the first value for key, or "".
+func (h Header) Get(key string) string {
+	vs, ok := h[CanonicalHeaderKey(key)]
+	if !ok || len(vs) == 0 {
+		return ""
+	}
+	return vs[0]
+}
+
+// Values returns all values for key.
+func (h Header) Values(key string) []string {
+	return h[CanonicalHeaderKey(key)]
+}
+
+// Set replaces the values for key.
+func (h Header) Set(key string, value string) {
+	h[CanonicalHeaderKey(key)] = []string{value}
+}
+
+// Add appends a value for key.
+func (h Header) Add(key string, value string) {
+	k := CanonicalHeaderKey(key)
+	h[k] = append(h[k], value)
+}
+
+// Del removes key.
+func (h Header) Del(key string) {
+	delete(h, CanonicalHeaderKey(key))
+}
+
+// Has reports whether key is present.
+func (h Header) Has(key string) bool {
+	_, ok := h[CanonicalHeaderKey(key)]
+	return ok
+}
+
+// Clone returns a copy of h.
+func (h Header) Clone() Header {
+	c := Header{}
+	for k, vs in h {
+		var cp []string
+		cp = append(cp, vs...)
+		c[k] = cp
+	}
+	return c
+}
+
+func (h Header) writeTo(b *strings.Builder) {
+	for k, vs in h {
+		for v in vs {
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(strings.Map(dropCRLF, v))
+			b.WriteString("\r\n")
+		}
+	}
+}
+
+// dropCRLF removes CR and LF from header values (header injection).
+func dropCRLF(r rune) rune {
+	if r == '\r' || r == '\n' {
+		return -1
+	}
+	return r
+}
+
+// HTTP methods.
+const (
+	MethodGet     = "GET"
+	MethodHead    = "HEAD"
+	MethodPost    = "POST"
+	MethodPut     = "PUT"
+	MethodPatch   = "PATCH"
+	MethodDelete  = "DELETE"
+	MethodConnect = "CONNECT"
+	MethodOptions = "OPTIONS"
+	MethodTrace   = "TRACE"
+)
+
+// HTTP status codes.
+const (
+	StatusContinue           = 100
+	StatusSwitchingProtocols = 101
+
+	StatusOK                   = 200
+	StatusCreated              = 201
+	StatusAccepted             = 202
+	StatusNonAuthoritativeInfo = 203
+	StatusNoContent            = 204
+	StatusResetContent         = 205
+	StatusPartialContent       = 206
+
+	StatusMultipleChoices   = 300
+	StatusMovedPermanently  = 301
+	StatusFound             = 302
+	StatusSeeOther          = 303
+	StatusNotModified       = 304
+	StatusTemporaryRedirect = 307
+	StatusPermanentRedirect = 308
+
+	StatusBadRequest                   = 400
+	StatusUnauthorized                 = 401
+	StatusPaymentRequired              = 402
+	StatusForbidden                    = 403
+	StatusNotFound                     = 404
+	StatusMethodNotAllowed             = 405
+	StatusNotAcceptable                = 406
+	StatusRequestTimeout               = 408
+	StatusConflict                     = 409
+	StatusGone                         = 410
+	StatusLengthRequired               = 411
+	StatusPreconditionFailed           = 412
+	StatusRequestEntityTooLarge        = 413
+	StatusRequestURITooLong            = 414
+	StatusUnsupportedMediaType         = 415
+	StatusRequestedRangeNotSatisfiable = 416
+	StatusExpectationFailed            = 417
+	StatusTeapot                       = 418
+	StatusUnprocessableEntity          = 422
+	StatusTooManyRequests              = 429
+	StatusRequestHeaderFieldsTooLarge  = 431
+
+	StatusInternalServerError     = 500
+	StatusNotImplemented          = 501
+	StatusBadGateway              = 502
+	StatusServiceUnavailable      = 503
+	StatusGatewayTimeout          = 504
+	StatusHTTPVersionNotSupported = 505
+)
+
+// StatusText returns the text for an HTTP status code ("" if unknown).
+func StatusText(code int) string {
+	switch code {
+	case 100:
+		return "Continue"
+	case 101:
+		return "Switching Protocols"
+	case 200:
+		return "OK"
+	case 201:
+		return "Created"
+	case 202:
+		return "Accepted"
+	case 203:
+		return "Non-Authoritative Information"
+	case 204:
+		return "No Content"
+	case 205:
+		return "Reset Content"
+	case 206:
+		return "Partial Content"
+	case 300:
+		return "Multiple Choices"
+	case 301:
+		return "Moved Permanently"
+	case 302:
+		return "Found"
+	case 303:
+		return "See Other"
+	case 304:
+		return "Not Modified"
+	case 307:
+		return "Temporary Redirect"
+	case 308:
+		return "Permanent Redirect"
+	case 400:
+		return "Bad Request"
+	case 401:
+		return "Unauthorized"
+	case 402:
+		return "Payment Required"
+	case 403:
+		return "Forbidden"
+	case 404:
+		return "Not Found"
+	case 405:
+		return "Method Not Allowed"
+	case 406:
+		return "Not Acceptable"
+	case 408:
+		return "Request Timeout"
+	case 409:
+		return "Conflict"
+	case 410:
+		return "Gone"
+	case 411:
+		return "Length Required"
+	case 412:
+		return "Precondition Failed"
+	case 413:
+		return "Request Entity Too Large"
+	case 414:
+		return "Request URI Too Long"
+	case 415:
+		return "Unsupported Media Type"
+	case 416:
+		return "Requested Range Not Satisfiable"
+	case 417:
+		return "Expectation Failed"
+	case 418:
+		return "I'm a teapot"
+	case 422:
+		return "Unprocessable Entity"
+	case 429:
+		return "Too Many Requests"
+	case 431:
+		return "Request Header Fields Too Large"
+	case 500:
+		return "Internal Server Error"
+	case 501:
+		return "Not Implemented"
+	case 502:
+		return "Bad Gateway"
+	case 503:
+		return "Service Unavailable"
+	case 504:
+		return "Gateway Timeout"
+	case 505:
+		return "HTTP Version Not Supported"
+	}
+	return ""
+}
+
+func hasPrefixBytes(data []byte, prefix string) bool {
+	if len(data) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if data[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// DetectContentType guesses the MIME type of data from its first bytes:
+// HTML, XML, PDF, PNG, JPEG, GIF, WebP, ZIP, gzip, plain text or
+// application/octet-stream.
+func DetectContentType(data []byte) string {
+	if len(data) > 512 {
+		data = data[:512]
+	}
+	start := 0
+	for start < len(data) && (data[start] == ' ' || data[start] == '\t' || data[start] == '\r' || data[start] == '\n') {
+		start++
+	}
+	lower := strings.ToLower(string(data[start:]))
+	for tag in []string{"<!doctype html", "<html", "<head", "<body", "<title", "<p>", "<div", "<h1", "<script", "<table", "<a ", "<br"} {
+		if strings.HasPrefix(lower, tag) {
+			return "text/html; charset=utf-8"
+		}
+	}
+	if strings.HasPrefix(lower, "<?xml") {
+		return "text/xml; charset=utf-8"
+	}
+	switch {
+	case hasPrefixBytes(data, "%PDF-"):
+		return "application/pdf"
+	case hasPrefixBytes(data, "\x89PNG\x0D\x0A\x1A\x0A"):
+		return "image/png"
+	case hasPrefixBytes(data, "\xFF\xD8\xFF"):
+		return "image/jpeg"
+	case hasPrefixBytes(data, "GIF87a") || hasPrefixBytes(data, "GIF89a"):
+		return "image/gif"
+	case hasPrefixBytes(data, "RIFF") && len(data) >= 12 && string(data[8:12]) == "WEBP":
+		return "image/webp"
+	case hasPrefixBytes(data, "PK\x03\x04"):
+		return "application/zip"
+	case hasPrefixBytes(data, "\x1F\x8B\x08"):
+		return "application/x-gzip"
+	}
+	for c in data {
+		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != 0x0C && c != 0x1B {
+			return "application/octet-stream"
+		}
+	}
+	return "text/plain; charset=utf-8"
+}
+
+func contentTypeByExt(name string) string {
+	dot := strings.LastIndex(name, ".")
+	if dot < 0 {
+		return ""
+	}
+	switch strings.ToLower(name[dot:]) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".json":
+		return "application/json"
+	case ".txt", ".md":
+		return "text/plain; charset=utf-8"
+	case ".xml":
+		return "text/xml; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".ico":
+		return "image/x-icon"
+	case ".pdf":
+		return "application/pdf"
+	case ".wasm":
+		return "application/wasm"
+	case ".zip":
+		return "application/zip"
+	}
+	return ""
+}
+
+var dayNames = []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+var monthNames = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+
+func pad2(x int64) string {
+	if x < 10 {
+		return "0" + strconv.FormatInt(x, 10)
+	}
+	return strconv.FormatInt(x, 10)
+}
+
+// FormatTime formats a time in nanoseconds since the Unix epoch (as
+// returned by time.UnixNano) in the HTTP date format:
+// "Mon, 02 Jan 2006 15:04:05 GMT".
+func FormatTime(unixNano int64) string {
+	secs := unixNano / 1000000000
+	days := secs / 86400
+	rem := secs % 86400
+	if rem < 0 {
+		rem += 86400
+		days--
+	}
+	wd := (days + 4) % 7
+	if wd < 0 {
+		wd += 7
+	}
+	z := days + 719468
+	era := z / 146097
+	if z < 0 && z%146097 != 0 {
+		era--
+	}
+	doe := z - era*146097
+	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
+	y := yoe + era*400
+	doy := doe - (365*yoe + yoe/4 - yoe/100)
+	mp := (5*doy + 2) / 153
+	d := doy - (153*mp+2)/5 + 1
+	m := mp + 3
+	if mp >= 10 {
+		m = mp - 9
+	}
+	if m <= 2 {
+		y++
+	}
+	return dayNames[wd] + ", " + pad2(d) + " " + monthNames[m-1] + " " + strconv.FormatInt(y, 10) + " " +
+		pad2(rem/3600) + ":" + pad2(rem/60%60) + ":" + pad2(rem%60) + " GMT"
+}
+
+func nowHTTP() string {
+	return FormatTime(time.UnixNano())
+}

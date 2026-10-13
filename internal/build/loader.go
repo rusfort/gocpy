@@ -20,6 +20,7 @@ import (
 	"github.com/rusfort/gocpy/internal/parser"
 	"github.com/rusfort/gocpy/internal/token"
 	"github.com/rusfort/gocpy/internal/types"
+	"github.com/rusfort/gocpy/stdlib"
 )
 
 // unit is one package of the program.
@@ -368,7 +369,7 @@ func (l *loader) visit(u *unit) {
 	for _, f := range u.files {
 		for _, imp := range f.Imports {
 			p, err := strconv.Unquote(imp.Path.Value)
-			if err != nil || strings.HasPrefix(p, "std/") {
+			if err != nil || isCStd(p) {
 				continue // checked by the type checker
 			}
 			dep, err := l.resolve(u, p, imp.Pos())
@@ -403,6 +404,13 @@ func (l *loader) visit(u *unit) {
 	}
 }
 
+// isCStd reports whether p is a std package implemented by the compiler and
+// the C runtime (std/fmt, std/errors, std/sync, std/time); such imports are
+// kept for the type checker. Other std packages are Gocpy sources.
+func isCStd(p string) bool {
+	return strings.HasPrefix(p, "std/") && !stdlib.Has(p)
+}
+
 func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 	if IsLocalGoImport(p) {
 		return l.resolveLocalGo(from, p, pos)
@@ -421,6 +429,15 @@ func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 	}
 	var dir, modPath, modRoot string
 	switch {
+	case stdlib.Has(p):
+		root, err := stdlib.Dir()
+		if err != nil {
+			return nil, fmt.Errorf("package %q: cannot unpack the standard library: %v", p, err)
+		}
+		modPath, modRoot = "std", root
+		dir = filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(p, "std/")))
+	case strings.HasPrefix(p, "std/"):
+		return nil, fmt.Errorf("package %q is not in std (available: %s)", p, types.StdList())
 	case p == from.modPath || strings.HasPrefix(p, from.modPath+"/"):
 		modPath, modRoot = from.modPath, from.modRoot
 		dir = filepath.Join(from.modRoot, filepath.FromSlash(strings.TrimPrefix(strings.TrimPrefix(p, from.modPath), "/")))
@@ -519,7 +536,7 @@ func (l *loader) rewriteFile(u *unit, f *ast.File) {
 	aliasSpec := map[string]string{}
 	for _, imp := range f.Imports {
 		p, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || strings.HasPrefix(p, "std/") {
+		if err != nil || isCStd(p) {
 			keep = append(keep, imp)
 			if err == nil {
 				name := path.Base(p)

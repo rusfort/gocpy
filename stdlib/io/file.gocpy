@@ -1,0 +1,632 @@
+package io
+
+import (
+	"std/errors"
+	"std/sync"
+	"std/time"
+)
+
+// Flags for OpenFile; combine them with |.
+const (
+	O_RDONLY = 0   // open for reading only
+	O_WRONLY = 1   // open for writing only
+	O_RDWR   = 2   // open for reading and writing
+	O_APPEND = 8   // append data when writing
+	O_CREATE = 16  // create the file if it does not exist
+	O_EXCL   = 32  // with O_CREATE: the file must not exist
+	O_TRUNC  = 64  // truncate a regular writable file
+	O_SYNC   = 128 // synchronous I/O
+)
+
+// Whence values for Seek.
+const (
+	SeekStart   = 0 // relative to the start of the file
+	SeekCurrent = 1 // relative to the current offset
+	SeekEnd     = 2 // relative to the end
+)
+
+@extern("gocpy_sys_strerror")
+func strerror(code int) string
+
+@extern("gocpy_sys_errkind")
+func errKind(code int) int
+
+@extern("gocpy_sys_open")
+func sysOpen(path string, flags int, perm int) int
+
+@extern("gocpy_sys_read")
+func sysRead(fd int, p []byte) int
+
+@extern("gocpy_sys_write")
+func sysWrite(fd int, p []byte) int
+
+@extern("gocpy_sys_close")
+func sysClose(fd int) int
+
+@extern("gocpy_sys_seek")
+func sysSeek(fd int, off int64, whence int) int64
+
+@extern("gocpy_sys_fsync")
+func sysFsync(fd int) int
+
+@extern("gocpy_sys_stat")
+func sysStat(path string, out []int64) int
+
+@extern("gocpy_sys_fstat")
+func sysFstat(fd int, out []int64) int
+
+@extern("gocpy_sys_mkdir")
+func sysMkdir(path string, perm int) int
+
+@extern("gocpy_sys_remove")
+func sysRemove(path string) int
+
+@extern("gocpy_sys_rename")
+func sysRename(from string, to string) int
+
+@extern("gocpy_sys_readdir")
+func sysReaddir(path string, code []int64) string
+
+@extern("gocpy_sys_tempdir")
+func sysTempdir() string
+
+// ErrNotExist matches errors about a missing file (errors.Is).
+var ErrNotExist = errors.New("file does not exist")
+
+// ErrExist matches errors about an already existing file.
+var ErrExist = errors.New("file already exists")
+
+// ErrPermission matches "permission denied" errors.
+var ErrPermission = errors.New("permission denied")
+
+// ErrClosed is returned by operations on a closed file.
+var ErrClosed = errors.New("file already closed")
+
+// ErrTimeout matches timeouts of network operations.
+var ErrTimeout = errors.New("i/o timeout")
+
+// Errno is an operating-system error code.
+type Errno int
+
+func (e Errno) Error() string {
+	return strerror(int(e))
+}
+
+// Is lets errors.Is match ErrNotExist, ErrExist, ErrPermission and ErrTimeout.
+func (e Errno) Is(target error) bool {
+	switch errKind(int(e)) {
+	case 1:
+		return target == ErrNotExist
+	case 2:
+		return target == ErrExist
+	case 3:
+		return target == ErrPermission
+	case 4:
+		return target == ErrTimeout
+	}
+	return false
+}
+
+// Timeout reports whether the error is a timeout.
+func (e Errno) Timeout() bool {
+	return errKind(int(e)) == 4
+}
+
+// PathError records an error and the operation and file path that caused it.
+type PathError struct {
+	Op   string
+	Path string
+	Err  error
+}
+
+func (e *PathError) Error() string {
+	return e.Op + " " + e.Path + ": " + e.Err.Error()
+}
+
+func (e *PathError) Unwrap() error {
+	return e.Err
+}
+
+// LinkError records an error during a rename.
+type LinkError struct {
+	Op  string
+	Old string
+	New string
+	Err error
+}
+
+func (e *LinkError) Error() string {
+	return e.Op + " " + e.Old + " " + e.New + ": " + e.Err.Error()
+}
+
+func (e *LinkError) Unwrap() error {
+	return e.Err
+}
+
+func pathErr(op string, path string, code int) error {
+	return &PathError{Op: op, Path: path, Err: Errno(-code)}
+}
+
+// IsNotExist reports whether err says that a file does not exist.
+func IsNotExist(err error) bool {
+	return errors.Is(err, ErrNotExist)
+}
+
+// IsExist reports whether err says that a file already exists.
+func IsExist(err error) bool {
+	return errors.Is(err, ErrExist)
+}
+
+// IsPermission reports whether err is a "permission denied" error.
+func IsPermission(err error) bool {
+	return errors.Is(err, ErrPermission)
+}
+
+// IsTimeout reports whether err is a timeout.
+func IsTimeout(err error) bool {
+	return errors.Is(err, ErrTimeout)
+}
+
+// File is an open file descriptor.
+type File struct {
+	fd     int
+	name   string
+	closed bool
+	mu     sync.Mutex
+}
+
+// Stdin, Stdout and Stderr are the standard streams. Writes to Stdout share
+// the buffer of fmt.Println, so the output order is kept.
+var Stdin = &File{fd: 0, name: "/dev/stdin"}
+var Stdout = &File{fd: 1, name: "/dev/stdout"}
+var Stderr = &File{fd: 2, name: "/dev/stderr"}
+
+// NewFile returns a File for an open descriptor.
+func NewFile(fd int, name string) *File {
+	return &File{fd: fd, name: name}
+}
+
+// Name returns the name the file was opened with.
+func (f *File) Name() string {
+	return f.name
+}
+
+// Fd returns the operating-system descriptor.
+func (f *File) Fd() int {
+	return f.fd
+}
+
+// Read reads up to len(p) bytes; at the end of the file it returns 0, EOF.
+func (f *File) Read(p []byte) (int, error) {
+	if f.closed {
+		return 0, &PathError{Op: "read", Path: f.name, Err: ErrClosed}
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	r := sysRead(f.fd, p)
+	if r < 0 {
+		return 0, pathErr("read", f.name, r)
+	}
+	if r == 0 {
+		return 0, EOF
+	}
+	return r, nil
+}
+
+// Write writes all of p.
+func (f *File) Write(p []byte) (int, error) {
+	if f.closed {
+		return 0, &PathError{Op: "write", Path: f.name, Err: ErrClosed}
+	}
+	done := 0
+	for done < len(p) {
+		r := sysWrite(f.fd, p[done:])
+		if r < 0 {
+			return done, pathErr("write", f.name, r)
+		}
+		if r == 0 {
+			return done, ErrShortWrite
+		}
+		done += r
+	}
+	return done, nil
+}
+
+// WriteString writes s.
+func (f *File) WriteString(s string) (int, error) {
+	return f.Write([]byte(s))
+}
+
+// Close closes the file; a second Close returns an error.
+func (f *File) Close() error {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return &PathError{Op: "close", Path: f.name, Err: ErrClosed}
+	}
+	f.closed = true
+	f.mu.Unlock()
+	r := sysClose(f.fd)
+	if r < 0 {
+		return pathErr("close", f.name, r)
+	}
+	return nil
+}
+
+// Seek sets the offset for the next Read or Write (whence: SeekStart,
+// SeekCurrent, SeekEnd) and returns the new offset.
+func (f *File) Seek(offset int64, whence int) (int64, error) {
+	if f.closed {
+		return 0, &PathError{Op: "seek", Path: f.name, Err: ErrClosed}
+	}
+	r := sysSeek(f.fd, offset, whence)
+	if r < 0 {
+		return 0, pathErr("seek", f.name, int(r))
+	}
+	return r, nil
+}
+
+// Sync commits the file contents to stable storage.
+func (f *File) Sync() error {
+	if f.closed {
+		return &PathError{Op: "sync", Path: f.name, Err: ErrClosed}
+	}
+	r := sysFsync(f.fd)
+	if r < 0 {
+		return pathErr("sync", f.name, r)
+	}
+	return nil
+}
+
+// Stat returns the FileInfo of the open file.
+func (f *File) Stat() (FileInfo, error) {
+	if f.closed {
+		return FileInfo{}, &PathError{Op: "stat", Path: f.name, Err: ErrClosed}
+	}
+	out := make([]int64, 4)
+	r := sysFstat(f.fd, out)
+	if r < 0 {
+		return FileInfo{}, pathErr("stat", f.name, r)
+	}
+	return newInfo(baseName(f.name), out), nil
+}
+
+// Open opens a file for reading.
+func Open(name string) (*File, error) {
+	return OpenFile(name, O_RDONLY, 0)
+}
+
+// Create creates or truncates a file for reading and writing (mode 0666
+// before umask).
+func Create(name string) (*File, error) {
+	return OpenFile(name, O_RDWR|O_CREATE|O_TRUNC, 0o666)
+}
+
+// OpenFile opens a file with the given O_* flags and permissions.
+func OpenFile(name string, flag int, perm int) (*File, error) {
+	fd := sysOpen(name, flag, perm)
+	if fd < 0 {
+		return nil, pathErr("open", name, fd)
+	}
+	return &File{fd: fd, name: name}, nil
+}
+
+// ReadFile reads the whole file.
+func ReadFile(name string) ([]byte, error) {
+	f := Open(name)?
+	defer f.Close()
+	size := 512
+	out := make([]int64, 4)
+	if sysFstat(f.fd, out) == 0 && out[0] > 0 {
+		size = int(out[0]) + 1
+	}
+	buf := make([]byte, 0, size)
+	for {
+		if len(buf) == cap(buf) {
+			nb := make([]byte, len(buf), 2*cap(buf))
+			copyBytes(nb, buf)
+			buf = nb
+		}
+		k, err := f.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+k]
+		if err == EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
+	}
+}
+
+// WriteFile writes data to a file, creating it with perm or truncating it.
+func WriteFile(name string, data []byte, perm int) error {
+	f := OpenFile(name, O_WRONLY|O_CREATE|O_TRUNC, perm)?
+	_, werr := f.Write(data)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
+}
+
+// AppendFile appends data to a file, creating it with perm if needed.
+func AppendFile(name string, data []byte, perm int) error {
+	f := OpenFile(name, O_WRONLY|O_CREATE|O_APPEND, perm)?
+	_, werr := f.Write(data)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
+}
+
+// FileInfo describes a file.
+type FileInfo struct {
+	name    string
+	size    int64
+	mode    int
+	modTime int64
+	dir     bool
+}
+
+func newInfo(name string, out []int64) FileInfo {
+	return FileInfo{name: name, size: out[0], dir: out[1] != 0, modTime: out[2], mode: int(out[3])}
+}
+
+// Name is the base name of the file.
+func (fi FileInfo) Name() string {
+	return fi.name
+}
+
+// Size is the length in bytes.
+func (fi FileInfo) Size() int64 {
+	return fi.size
+}
+
+// Mode returns the permission bits (for example 0o644).
+func (fi FileInfo) Mode() int {
+	return fi.mode
+}
+
+// ModTime is the modification time in nanoseconds since the Unix epoch
+// (the clock of time.UnixNano).
+func (fi FileInfo) ModTime() int64 {
+	return fi.modTime
+}
+
+// IsDir reports whether the file is a directory.
+func (fi FileInfo) IsDir() bool {
+	return fi.dir
+}
+
+func baseName(p string) string {
+	end := len(p)
+	for end > 1 && p[end-1] == '/' {
+		end--
+	}
+	i := end - 1
+	for i >= 0 && p[i] != '/' {
+		i--
+	}
+	return p[i+1 : end]
+}
+
+func joinPath(dir string, name string) string {
+	if dir == "" {
+		return name
+	}
+	if dir[len(dir)-1] == '/' {
+		return dir + name
+	}
+	return dir + "/" + name
+}
+
+// Stat returns the FileInfo of a file.
+func Stat(name string) (FileInfo, error) {
+	out := make([]int64, 4)
+	r := sysStat(name, out)
+	if r < 0 {
+		return FileInfo{}, pathErr("stat", name, r)
+	}
+	return newInfo(baseName(name), out), nil
+}
+
+// Exists reports whether the file exists.
+func Exists(name string) bool {
+	_, err := Stat(name)
+	return err == nil
+}
+
+// Remove removes a file or an empty directory.
+func Remove(name string) error {
+	r := sysRemove(name)
+	if r < 0 {
+		return pathErr("remove", name, r)
+	}
+	return nil
+}
+
+// RemoveAll removes path and everything it contains. A missing path is not
+// an error.
+func RemoveAll(path string) error {
+	info, err := Stat(path)
+	if err != nil {
+		if IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		entries := ReadDir(path)?
+		for e in entries {
+			RemoveAll(joinPath(path, e.Name()))?
+		}
+	}
+	err = Remove(path)
+	if err != nil && IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+// Rename renames (moves) a file.
+func Rename(oldpath string, newpath string) error {
+	r := sysRename(oldpath, newpath)
+	if r < 0 {
+		return &LinkError{Op: "rename", Old: oldpath, New: newpath, Err: Errno(-r)}
+	}
+	return nil
+}
+
+// Mkdir creates a directory.
+func Mkdir(name string, perm int) error {
+	r := sysMkdir(name, perm)
+	if r < 0 {
+		return pathErr("mkdir", name, r)
+	}
+	return nil
+}
+
+// MkdirAll creates a directory and all missing parents.
+func MkdirAll(path string, perm int) error {
+	info, err := Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return nil
+		}
+		return &PathError{Op: "mkdir", Path: path, Err: Errno(20)}
+	}
+	end := len(path)
+	for end > 1 && path[end-1] == '/' {
+		end--
+	}
+	i := end - 1
+	for i > 0 && path[i] != '/' {
+		i--
+	}
+	if i > 0 {
+		MkdirAll(path[:i], perm)?
+	}
+	err = Mkdir(path[:end], perm)
+	if err != nil {
+		info2, serr := Stat(path)
+		if serr == nil && info2.IsDir() {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// DirEntry is an entry read from a directory.
+type DirEntry struct {
+	name string
+	dir  string
+	isd  bool
+}
+
+// Name returns the file name of the entry.
+func (d DirEntry) Name() string {
+	return d.name
+}
+
+// IsDir reports whether the entry is a directory.
+func (d DirEntry) IsDir() bool {
+	return d.isd
+}
+
+// Info returns the FileInfo of the entry.
+func (d DirEntry) Info() (FileInfo, error) {
+	return Stat(joinPath(d.dir, d.name))
+}
+
+// ReadDir reads a directory and returns its entries sorted by name.
+func ReadDir(name string) ([]DirEntry, error) {
+	code := []int64{0}
+	all := sysReaddir(name, code)
+	if code[0] != 0 {
+		return nil, &PathError{Op: "open", Path: name, Err: Errno(int(code[0]))}
+	}
+	var entries []DirEntry
+	start := 0
+	out := make([]int64, 4)
+	for i := 0; i < len(all); i++ {
+		if all[i] == 0 {
+			n := all[start:i]
+			start = i + 1
+			d := sysStat(joinPath(name, n), out) == 0 && out[1] != 0
+			entries = append(entries, DirEntry{name: n, dir: name, isd: d})
+		}
+	}
+	return entries, nil
+}
+
+// TempDir returns the directory for temporary files ($TMPDIR or /tmp).
+func TempDir() string {
+	return sysTempdir()
+}
+
+var tempMu sync.Mutex
+var tempSeq int64 = 0
+
+func tempName(pattern string) string {
+	tempMu.Lock()
+	tempSeq++
+	seed := uint64(time.UnixNano()) ^ uint64(time.Now()) ^ (uint64(tempSeq) * 0x9E3779B97F4A7C15)
+	tempMu.Unlock()
+	seed ^= seed >> 33
+	seed *= 0xFF51AFD7ED558CCD
+	seed ^= seed >> 33
+	digits := "0123456789"
+	var buf [10]byte
+	for i := 0; i < 10; i++ {
+		buf[i] = digits[seed%10]
+		seed /= 10
+	}
+	random := string(buf[:])
+	for i := 0; i < len(pattern); i++ {
+		if pattern[i] == '*' {
+			return pattern[:i] + random + pattern[i+1:]
+		}
+	}
+	return pattern + random
+}
+
+// CreateTemp creates a new temporary file in dir (TempDir() if empty); the
+// last "*" in pattern is replaced by a random string. The caller removes
+// the file.
+func CreateTemp(dir string, pattern string) (*File, error) {
+	if dir == "" {
+		dir = TempDir()
+	}
+	for attempt := 0; attempt < 10000; attempt++ {
+		name := joinPath(dir, tempName(pattern))
+		f, err := OpenFile(name, O_RDWR|O_CREATE|O_EXCL, 0o600)
+		if err == nil {
+			return f, nil
+		}
+		if !IsExist(err) {
+			return nil, err
+		}
+	}
+	return nil, &PathError{Op: "createtemp", Path: joinPath(dir, pattern), Err: ErrExist}
+}
+
+// MkdirTemp creates a new temporary directory and returns its path.
+func MkdirTemp(dir string, pattern string) (string, error) {
+	if dir == "" {
+		dir = TempDir()
+	}
+	for attempt := 0; attempt < 10000; attempt++ {
+		name := joinPath(dir, tempName(pattern))
+		err := Mkdir(name, 0o700)
+		if err == nil {
+			return name, nil
+		}
+		if !IsExist(err) {
+			return "", err
+		}
+	}
+	return "", &PathError{Op: "mkdirtemp", Path: joinPath(dir, pattern), Err: ErrExist}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/rusfort/gocpy/internal/gobridge"
 	"github.com/rusfort/gocpy/internal/token"
 	"github.com/rusfort/gocpy/internal/types"
+	"github.com/rusfort/gocpy/stdlib"
 )
 
 var (
@@ -123,6 +124,7 @@ func (s *server) importItems(path string) []CompletionItem {
 	for p := range types.StdPackages {
 		std = append(std, p)
 	}
+	std = append(std, stdlib.Packages()...)
 	sort.Strings(std)
 	for _, p := range std {
 		add(p, "standard library", ckModule)

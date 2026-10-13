@@ -1,0 +1,283 @@
+// Package io provides I/O interfaces and helpers, files and directories
+// (the part of Go's os package that deals with the file system), buffered
+// reading and writing (Go's bufio) and an in-memory Buffer (Go's
+// bytes.Buffer).
+package io
+
+import "std/errors"
+
+// Reader is the interface that wraps the basic Read method. At the end of
+// the input Read returns 0 and EOF.
+type Reader interface {
+	Read(p []byte) (n int, err error)
+}
+
+// Writer is the interface that wraps the basic Write method.
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+// Closer is the interface that wraps the basic Close method.
+type Closer interface {
+	Close() error
+}
+
+// Seeker is the interface that wraps the basic Seek method.
+type Seeker interface {
+	Seek(offset int64, whence int) (int64, error)
+}
+
+// ReadWriter groups Read and Write.
+type ReadWriter interface {
+	Reader
+	Writer
+}
+
+// ReadCloser groups Read and Close.
+type ReadCloser interface {
+	Reader
+	Closer
+}
+
+// WriteCloser groups Write and Close.
+type WriteCloser interface {
+	Writer
+	Closer
+}
+
+// ReadWriteCloser groups Read, Write and Close.
+type ReadWriteCloser interface {
+	Reader
+	Writer
+	Closer
+}
+
+// StringWriter is the interface that wraps the WriteString method.
+type StringWriter interface {
+	WriteString(s string) (n int, err error)
+}
+
+// ByteReader is the interface that wraps the ReadByte method.
+type ByteReader interface {
+	ReadByte() (byte, error)
+}
+
+@extern("gocpy_io_eof")
+func eofError() error
+
+@extern("gocpy_io_unexpected_eof")
+func unexpectedEOFError() error
+
+@extern("gocpy_sys_copy")
+func copyBytes(dst []byte, src []byte) int
+
+// EOF is returned by Read when no more input is available.
+var EOF = eofError()
+
+// ErrUnexpectedEOF means that EOF was met in the middle of a fixed-size block.
+var ErrUnexpectedEOF = unexpectedEOFError()
+
+// ErrShortWrite means that a write accepted fewer bytes than requested.
+var ErrShortWrite = errors.New("short write")
+
+// ErrShortBuffer means that a read required a longer buffer.
+var ErrShortBuffer = errors.New("short buffer")
+
+// ErrNoProgress is returned by readers that keep returning 0 bytes and no error.
+var ErrNoProgress = errors.New("multiple Read calls return no data or error")
+
+// Copy copies from src to dst until EOF or an error and returns the number
+// of bytes copied. Reaching EOF is not an error.
+func Copy(dst Writer, src Reader) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var total int64 = 0
+	for {
+		nr, rerr := src.Read(buf)
+		if nr > 0 {
+			nw, werr := dst.Write(buf[:nr])
+			total += int64(nw)
+			if werr != nil {
+				return total, werr
+			}
+			if nw != nr {
+				return total, ErrShortWrite
+			}
+		}
+		if rerr == EOF {
+			return total, nil
+		}
+		if rerr != nil {
+			return total, rerr
+		}
+	}
+}
+
+// CopyN copies n bytes (or until an error) from src to dst.
+func CopyN(dst Writer, src Reader, n int64) (int64, error) {
+	written, err := Copy(dst, LimitReader(src, n))
+	if written == n {
+		return n, nil
+	}
+	if written < n && err == nil {
+		return written, EOF
+	}
+	return written, err
+}
+
+// ReadAll reads from r until EOF and returns the data.
+func ReadAll(r Reader) ([]byte, error) {
+	buf := make([]byte, 0, 512)
+	for {
+		if len(buf) == cap(buf) {
+			nb := make([]byte, len(buf), 2*cap(buf))
+			copyBytes(nb, buf)
+			buf = nb
+		}
+		k, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+k]
+		if err == EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
+	}
+}
+
+// ReadAtLeast reads into buf until it has read at least min bytes.
+func ReadAtLeast(r Reader, buf []byte, atLeast int) (int, error) {
+	if len(buf) < atLeast {
+		return 0, ErrShortBuffer
+	}
+	total := 0
+	var err error = nil
+	empty := 0
+	for total < atLeast && err == nil {
+		k, e := r.Read(buf[total:])
+		total += k
+		err = e
+		if k == 0 && e == nil {
+			empty++
+			if empty > 100 {
+				return total, ErrNoProgress
+			}
+		}
+	}
+	if total >= atLeast {
+		err = nil
+	} else if total > 0 && err == EOF {
+		err = ErrUnexpectedEOF
+	}
+	return total, err
+}
+
+// ReadFull reads exactly len(buf) bytes. It returns EOF if nothing was
+// read and ErrUnexpectedEOF if the input ended early.
+func ReadFull(r Reader, buf []byte) (int, error) {
+	return ReadAtLeast(r, buf, len(buf))
+}
+
+// WriteString writes s to w.
+func WriteString(w Writer, s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+// LimitedReader reads at most N bytes from R.
+type LimitedReader struct {
+	R Reader
+	N int64
+}
+
+// LimitReader returns a Reader that stops with EOF after n bytes.
+func LimitReader(r Reader, n int64) Reader {
+	return &LimitedReader{R: r, N: n}
+}
+
+func (l *LimitedReader) Read(p []byte) (int, error) {
+	if l.N <= 0 {
+		return 0, EOF
+	}
+	if int64(len(p)) > l.N {
+		p = p[:l.N]
+	}
+	k, err := l.R.Read(p)
+	l.N -= int64(k)
+	return k, err
+}
+
+type nopCloser struct {
+	r Reader
+}
+
+func (c *nopCloser) Read(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+
+func (c *nopCloser) Close() error {
+	return nil
+}
+
+// NopCloser returns a ReadCloser with a no-op Close method wrapping r.
+func NopCloser(r Reader) ReadCloser {
+	return &nopCloser{r: r}
+}
+
+type discard struct{}
+
+func (d discard) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (d discard) WriteString(s string) (int, error) {
+	return len(s), nil
+}
+
+// Discard is a Writer on which all Write calls succeed and do nothing.
+var Discard Writer = discard{}
+
+type multiWriter struct {
+	writers []Writer
+}
+
+func (m *multiWriter) Write(p []byte) (int, error) {
+	for w in m.writers {
+		k, err := w.Write(p)
+		if err != nil {
+			return k, err
+		}
+		if k != len(p) {
+			return k, ErrShortWrite
+		}
+	}
+	return len(p), nil
+}
+
+// MultiWriter creates a writer that duplicates its writes to all writers.
+func MultiWriter(writers ...Writer) Writer {
+	return &multiWriter{writers: writers}
+}
+
+type multiReader struct {
+	readers []Reader
+}
+
+func (m *multiReader) Read(p []byte) (int, error) {
+	for len(m.readers) > 0 {
+		k, err := m.readers[0].Read(p)
+		if err == EOF {
+			m.readers = m.readers[1:]
+		}
+		if k > 0 || (err != nil && err != EOF) {
+			if err == EOF && len(m.readers) > 0 {
+				err = nil
+			}
+			return k, err
+		}
+	}
+	return 0, EOF
+}
+
+// MultiReader returns a Reader that is the concatenation of the readers.
+func MultiReader(readers ...Reader) Reader {
+	return &multiReader{readers: readers}
+}

@@ -1,0 +1,30 @@
+package main
+
+import (
+	"std/fmt"
+	"std/strings"
+)
+
+func main() {
+	fmt.Println(strings.Contains("hello world", "o w"), strings.Index("chicken", "ken"), strings.LastIndex("go gopher", "go"))
+	fmt.Printf("%q\n", strings.Split("a,b,,c", ","))
+	fmt.Printf("%q\n", strings.SplitN("a,b,c,d", ",", 2))
+	fmt.Printf("%q\n", strings.Fields("  foo bar  baz   "))
+	fmt.Println(strings.Join([]string{"x", "y", "z"}, "-"), strings.Repeat("ab", 3))
+	fmt.Println(strings.Replace("oink oink oink", "k", "ky", 2), strings.ReplaceAll("oink oink", "oink", "moo"))
+	fmt.Printf("[%s] [%s] [%s]\n", strings.TrimSpace("  \t x y \n"), strings.Trim("xxhixx", "x"), strings.TrimPrefix("prefix-body", "prefix-"))
+	fmt.Println(strings.ToUpper("Привет, world ёж"), strings.ToLower("ПРИВЕТ, WORLD ЁЖ ΣΑΣ"))
+	before, after, found := strings.Cut("key=value", "=")
+	fmt.Println(before, after, found, strings.Count("cheese", "e"), strings.Count("five", ""))
+	fmt.Println(strings.HasPrefix("golang", "go"), strings.HasSuffix("golang", "ng"), strings.EqualFold("Go", "GO"))
+	var b strings.Builder
+	for i := 0; i < 3; i++ {
+		b.WriteString(fmt.Sprintf("%d;", i))
+	}
+	b.WriteRune('ж')
+	b.WriteByte('!')
+	fmt.Println(b.String(), b.Len())
+	fmt.Println(strings.Title("hello wide world"), strings.IndexRune("chicken", 'k'), strings.ContainsAny("failure", "ui"))
+	fmt.Printf("%q\n", strings.SplitAfter("a,b,c", ","))
+	fmt.Println(strings.TrimRight("hello!!!", "!"), strings.TrimLeft("¡¡hola", "¡"))
+}

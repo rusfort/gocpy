@@ -1,0 +1,288 @@
+// Package udp provides UDP sockets (IPv4 and IPv6): listening, dialing,
+// sending and receiving datagrams with timeouts.
+package udp
+
+import (
+	"std/errors"
+	"std/io"
+	"std/strconv"
+	"std/strings"
+	"std/sync"
+	"std/time"
+)
+
+@extern("gocpy_sys_udp_open")
+func sysOpen(host string, port int, connect bool) int
+
+@extern("gocpy_sys_sendto")
+func sysSendto(fd int, p []byte, host string, port int) int
+
+@extern("gocpy_sys_recvfrom")
+func sysRecvfrom(fd int, p []byte) int
+
+@extern("gocpy_sys_last_peer_ip")
+func lastPeerIP() string
+
+@extern("gocpy_sys_last_peer_port")
+func lastPeerPort() int
+
+@extern("gocpy_sys_sock_ip")
+func sockIP(fd int, peer bool) string
+
+@extern("gocpy_sys_sock_port")
+func sockPort(fd int, peer bool) int
+
+@extern("gocpy_sys_set_timeout")
+func setTimeout(fd int, readMs int, writeMs int) int
+
+@extern("gocpy_sys_read")
+func sysRead(fd int, p []byte) int
+
+@extern("gocpy_sys_write")
+func sysWrite(fd int, p []byte) int
+
+@extern("gocpy_sys_close")
+func sysClose(fd int) int
+
+@extern("gocpy_sys_resolve")
+func sysResolve(host string, code []int64) string
+
+// MaxDatagramSize is the largest UDP payload over IPv4.
+const MaxDatagramSize = 65507
+
+// ErrClosed is returned by operations on a closed connection.
+var ErrClosed = errors.New("use of closed network connection")
+
+// Addr is a UDP endpoint. An empty IP means all interfaces for Listen and
+// localhost for sending.
+type Addr struct {
+	IP   string
+	Port int
+}
+
+// String returns "ip:port" ("[ip]:port" for IPv6).
+func (a Addr) String() string {
+	if strings.Contains(a.IP, ":") {
+		return "[" + a.IP + "]:" + strconv.Itoa(a.Port)
+	}
+	return a.IP + ":" + strconv.Itoa(a.Port)
+}
+
+// Error is a network error with the operation and address.
+type Error struct {
+	Op   string // "listen", "dial", "read", "write"...
+	Addr string
+	Err  error
+}
+
+func (e *Error) Error() string {
+	if e.Op == "lookup" || e.Op == "address" {
+		return e.Op + " " + e.Addr + ": " + e.Err.Error()
+	}
+	if e.Addr == "" {
+		return e.Op + " udp: " + e.Err.Error()
+	}
+	return e.Op + " udp " + e.Addr + ": " + e.Err.Error()
+}
+
+func (e *Error) Unwrap() error {
+	return e.Err
+}
+
+// Timeout reports whether the operation timed out.
+func (e *Error) Timeout() bool {
+	return io.IsTimeout(e.Err)
+}
+
+func opErr(op string, addr string, code int) error {
+	return &Error{Op: op, Addr: addr, Err: io.Errno(-code)}
+}
+
+// SplitHostPort splits "host:port", "[ipv6]:port" or ":port".
+func SplitHostPort(address string) (string, int, error) {
+	i := strings.LastIndex(address, ":")
+	if i < 0 {
+		return "", 0, &Error{Op: "address", Addr: address, Err: errors.New("missing port in address")}
+	}
+	host := address[:i]
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	} else if strings.Contains(host, ":") {
+		return "", 0, &Error{Op: "address", Addr: address, Err: errors.New("too many colons in address")}
+	}
+	port, err := strconv.Atoi(address[i+1:])
+	if err != nil || port < 0 || port > 65535 {
+		return "", 0, &Error{Op: "address", Addr: address, Err: errors.New("invalid port")}
+	}
+	return host, port, nil
+}
+
+// ResolveAddr resolves "host:port" to an IP address.
+func ResolveAddr(address string) (Addr, error) {
+	host, port := SplitHostPort(address)?
+	if host == "" {
+		return Addr{Port: port}, nil
+	}
+	code := []int64{0}
+	ip := sysResolve(host, code)
+	if code[0] != 0 {
+		return Addr{}, &Error{Op: "lookup", Addr: host, Err: io.Errno(int(code[0]))}
+	}
+	return Addr{IP: ip, Port: port}, nil
+}
+
+// Conn is a UDP socket.
+type Conn struct {
+	fd        int
+	connected bool
+	closed    bool
+	mu        sync.Mutex
+}
+
+// Listen opens a UDP socket bound to address ("host:port"; ":0" picks a
+// free port, see LocalAddr).
+func Listen(address string) (*Conn, error) {
+	host, port := SplitHostPort(address)?
+	fd := sysOpen(host, port, false)
+	if fd < 0 {
+		return nil, opErr("listen", address, fd)
+	}
+	return &Conn{fd: fd}, nil
+}
+
+// Dial opens a UDP socket connected to address: Write sends to it and Read
+// receives only from it.
+func Dial(address string) (*Conn, error) {
+	host, port := SplitHostPort(address)?
+	fd := sysOpen(host, port, true)
+	if fd < 0 {
+		return nil, opErr("dial", address, fd)
+	}
+	return &Conn{fd: fd, connected: true}, nil
+}
+
+func (c *Conn) isClosed() bool {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	return closed
+}
+
+// LocalAddr returns the local address.
+func (c *Conn) LocalAddr() Addr {
+	return Addr{IP: sockIP(c.fd, false), Port: sockPort(c.fd, false)}
+}
+
+// RemoteAddr returns the address of a dialed connection (zero otherwise).
+func (c *Conn) RemoteAddr() Addr {
+	if !c.connected {
+		return Addr{}
+	}
+	return Addr{IP: sockIP(c.fd, true), Port: sockPort(c.fd, true)}
+}
+
+// ReadFrom receives one datagram into p and returns its size and sender.
+// A datagram longer than p is truncated.
+func (c *Conn) ReadFrom(p []byte) (int, Addr, error) {
+	if c.isClosed() {
+		return 0, Addr{}, &Error{Op: "read", Err: ErrClosed}
+	}
+	r := sysRecvfrom(c.fd, p)
+	if c.isClosed() {
+		return 0, Addr{}, &Error{Op: "read", Err: ErrClosed} // woken up by Close
+	}
+	if r < 0 {
+		return 0, Addr{}, opErr("read", c.LocalAddr().String(), r)
+	}
+	return r, Addr{IP: lastPeerIP(), Port: lastPeerPort()}, nil
+}
+
+// WriteTo sends p as one datagram to addr (not allowed on a dialed Conn).
+func (c *Conn) WriteTo(p []byte, addr Addr) (int, error) {
+	if c.isClosed() {
+		return 0, &Error{Op: "write", Addr: addr.String(), Err: ErrClosed}
+	}
+	if c.connected {
+		return 0, &Error{Op: "write", Addr: addr.String(), Err: errors.New("use of WriteTo with pre-connected connection")}
+	}
+	r := sysSendto(c.fd, p, addr.IP, addr.Port)
+	if r < 0 {
+		return 0, opErr("write", addr.String(), r)
+	}
+	return r, nil
+}
+
+// Read receives one datagram (from any sender unless the Conn was dialed).
+func (c *Conn) Read(p []byte) (int, error) {
+	if !c.connected {
+		k, _, err := c.ReadFrom(p)
+		return k, err
+	}
+	if c.isClosed() {
+		return 0, &Error{Op: "read", Err: ErrClosed}
+	}
+	r := sysRead(c.fd, p)
+	if c.isClosed() {
+		return 0, &Error{Op: "read", Err: ErrClosed}
+	}
+	if r < 0 {
+		return 0, opErr("read", c.RemoteAddr().String(), r)
+	}
+	return r, nil
+}
+
+// Write sends p as one datagram to the dialed address.
+func (c *Conn) Write(p []byte) (int, error) {
+	if c.isClosed() {
+		return 0, &Error{Op: "write", Err: ErrClosed}
+	}
+	if !c.connected {
+		return 0, &Error{Op: "write", Err: errors.New("destination address required; use WriteTo or Dial")}
+	}
+	r := sysWrite(c.fd, p)
+	if r < 0 {
+		return 0, opErr("write", c.RemoteAddr().String(), r)
+	}
+	return r, nil
+}
+
+func toMs(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	ms := int(d.Milliseconds())
+	if ms == 0 {
+		return 1
+	}
+	return ms
+}
+
+// SetReadTimeout limits the time a read waits for a datagram; 0 disables
+// the limit. A timed-out read returns an *Error whose Timeout() is true.
+func (c *Conn) SetReadTimeout(d time.Duration) error {
+	if setTimeout(c.fd, toMs(d), -1) < 0 {
+		return &Error{Op: "set", Err: errors.New("cannot set the read timeout")}
+	}
+	return nil
+}
+
+// SetWriteTimeout limits the time a write may block; 0 disables the limit.
+func (c *Conn) SetWriteTimeout(d time.Duration) error {
+	if setTimeout(c.fd, -1, toMs(d)) < 0 {
+		return &Error{Op: "set", Err: errors.New("cannot set the write timeout")}
+	}
+	return nil
+}
+
+// Close closes the socket and wakes up a blocked read.
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return &Error{Op: "close", Err: ErrClosed}
+	}
+	c.closed = true
+	c.mu.Unlock()
+	sysClose(c.fd)
+	return nil
+}

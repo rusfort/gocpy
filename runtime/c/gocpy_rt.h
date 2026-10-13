@@ -97,7 +97,16 @@ typedef struct gocpy_typeinfo {
     bool (*eq)(const void *a, const void *b);          /* NULL: not comparable */
     int nmethods;
     const gocpy_method *methods;                       /* method set (for dynamic itab lookup) */
+    int kind;                                          /* GOCPY_K_* (0: other) */
+    const struct gocpy_typeinfo *elem;                 /* pointer, slice and array element */
+    const struct gocpy_idesc *iface;                   /* interface types: method descriptor */
 } gocpy_typeinfo;
+
+/* kinds for fmt verbs, Scan and errors.As */
+enum {
+    GOCPY_K_OTHER = 0, GOCPY_K_BOOL, GOCPY_K_INT, GOCPY_K_UINT, GOCPY_K_FLOAT, GOCPY_K_STRING,
+    GOCPY_K_PTR, GOCPY_K_SLICE, GOCPY_K_ARRAY, GOCPY_K_IFACE, GOCPY_K_STRUCT, GOCPY_K_MAP,
+};
 
 typedef struct gocpy_exception {
     const gocpy_typeinfo *type;
@@ -157,6 +166,7 @@ void gocpy_mutex_unlock(gocpy_mutex *m);
 void gocpy_sleep(int64_t ns);
 int64_t gocpy_now(void);                               /* monotonic nanoseconds */
 int64_t gocpy_since(int64_t t);
+int64_t gocpy_unix_nano(void);                         /* wall clock, ns since 1970 */
 static inline int64_t gocpy_dur_ms(int64_t d) { return d / 1000000; }
 static inline double gocpy_dur_seconds(int64_t d) { return (double)d / 1e9; }
 
@@ -207,6 +217,75 @@ bool gocpy_exc_as_iface(gocpy_exception *e, const gocpy_idesc *I, gocpy_iface *o
 
 /* std/errors */
 gocpy_iface gocpy_errors_new(gocpy_string msg);
+
+/* ---------------------------------------------------------------- gocpy_lib.c
+ * fmt (Printf family, Scan family), errors (Is, As, Unwrap) and the system
+ * calls behind std/io, std/http and std/udp. */
+
+/* (int, error): shared with generated code, which skips its definition */
+typedef struct gocpy_tup_Tint_error gocpy_tup_Tint_error;
+struct gocpy_tup_Tint_error { int64_t r0; gocpy_iface r1; };
+
+gocpy_string gocpy_fmt_sprintf(gocpy_string format, gocpy_slice args);
+gocpy_string gocpy_fmt_sprint(gocpy_slice args);
+gocpy_string gocpy_fmt_sprintln(gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_printf(gocpy_string format, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fprint(gocpy_iface w, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fprintln(gocpy_iface w, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fprintf(gocpy_iface w, gocpy_string format, gocpy_slice args);
+gocpy_iface gocpy_fmt_errorf(gocpy_string format, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_scan(gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_scanln(gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_scanf(gocpy_string format, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_sscan(gocpy_string str, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_sscanln(gocpy_string str, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_sscanf(gocpy_string str, gocpy_string format, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fscan(gocpy_iface r, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fscanln(gocpy_iface r, gocpy_slice args);
+gocpy_tup_Tint_error gocpy_fmt_fscanf(gocpy_iface r, gocpy_string format, gocpy_slice args);
+
+gocpy_iface gocpy_io_eof(void);                        /* io.EOF */
+gocpy_iface gocpy_io_unexpected_eof(void);             /* io.ErrUnexpectedEOF */
+
+bool gocpy_errors_is(gocpy_iface err, gocpy_iface target);
+bool gocpy_errors_as(gocpy_iface err, gocpy_iface target);
+gocpy_iface gocpy_errors_unwrap(gocpy_iface err);
+gocpy_iface gocpy_errors_join(gocpy_slice errs);
+
+/* system calls: negative results are -errno (or GOCPY_EGAI - gai error) */
+#define GOCPY_EGAI 100000
+double gocpy_strconv_parse_float(gocpy_string s, int64_t bits, gocpy_slice err); /* err[0]: 0 ok, 1 syntax, 2 range */
+gocpy_string gocpy_strconv_format_float(double v, int64_t fmt, int64_t prec, int64_t bits);
+gocpy_string gocpy_sys_strerror(int64_t code);
+int64_t gocpy_sys_copy(gocpy_slice dst, gocpy_slice src);
+int64_t gocpy_sys_errkind(int64_t code);
+int64_t gocpy_sys_open(gocpy_string path, int64_t flags, int64_t perm);
+int64_t gocpy_sys_read(int64_t fd, gocpy_slice p);
+int64_t gocpy_sys_write(int64_t fd, gocpy_slice p);
+int64_t gocpy_sys_close(int64_t fd);
+int64_t gocpy_sys_seek(int64_t fd, int64_t off, int64_t whence);
+int64_t gocpy_sys_fsync(int64_t fd);
+int64_t gocpy_sys_stat(gocpy_string path, gocpy_slice out);   /* out: []int64{size, isdir, mtime_ns, mode} */
+int64_t gocpy_sys_fstat(int64_t fd, gocpy_slice out);
+int64_t gocpy_sys_mkdir(gocpy_string path, int64_t perm);
+int64_t gocpy_sys_remove(gocpy_string path);
+int64_t gocpy_sys_rename(gocpy_string from, gocpy_string to);
+gocpy_string gocpy_sys_readdir(gocpy_string path, gocpy_slice err); /* each name ends with NUL; err[0] = errno */
+gocpy_string gocpy_sys_tempdir(void);
+/* sockets */
+int64_t gocpy_sys_tcp_listen(gocpy_string host, int64_t port);
+int64_t gocpy_sys_tcp_accept(int64_t fd);
+int64_t gocpy_sys_tcp_dial(gocpy_string host, int64_t port, int64_t timeout_ms);
+int64_t gocpy_sys_udp_open(gocpy_string host, int64_t port, bool connect);
+int64_t gocpy_sys_sendto(int64_t fd, gocpy_slice p, gocpy_string host, int64_t port);
+int64_t gocpy_sys_recvfrom(int64_t fd, gocpy_slice p);         /* sender: gocpy_sys_last_peer_* */
+gocpy_string gocpy_sys_last_peer_ip(void);
+int64_t gocpy_sys_last_peer_port(void);
+gocpy_string gocpy_sys_sock_ip(int64_t fd, bool peer);
+int64_t gocpy_sys_sock_port(int64_t fd, bool peer);
+int64_t gocpy_sys_set_timeout(int64_t fd, int64_t read_ms, int64_t write_ms);
+int64_t gocpy_sys_shutdown_write(int64_t fd);
+gocpy_string gocpy_sys_resolve(gocpy_string host, gocpy_slice err);
 
 /* Maps: hash table with insertion-ordered iteration. */
 typedef struct gocpy_map gocpy_map;

@@ -526,13 +526,38 @@ See [examples/golocal](examples/golocal).
 
 | Package | Contents |
 |---|---|
-| `std/fmt` | `Println`, `Print`, `Sprint` |
-| `std/errors` | `New` |
+| `std/fmt` | `Print`/`Println`/`Printf`, `Sprint*`, `Fprint*`, `Errorf` (with `%w`), `Scan`/`Scanln`/`Scanf`, `Sscan*`, `Fscan*`, `Stringer`; verbs `%v %d %s %q %x %X %o %b %c %U %e %f %g %t %p %T`, width, precision and flags |
+| `std/errors` | `New`, `Is`, `As`, `Unwrap`, `Join` |
+| `std/strings` | `Contains`, `Index`, `Split`, `Fields`, `Join`, `Replace`, `Trim*`, `Cut*`, `ToUpper`/`ToLower`, `EqualFold`, `Map`, `Count`, `Builder`, `Reader` and more |
+| `std/strconv` | `Itoa`, `Atoi`, `ParseInt`/`ParseUint`/`ParseFloat`/`ParseBool`, `Format*`, `Quote`, `Unquote`, `NumError` |
+| `std/io` | Go's `io` interfaces and helpers (`Reader`, `Writer`, `Copy`, `ReadAll`, `ReadFull`, `MultiReader`, ...), files (`Open`, `Create`, `OpenFile`, `ReadFile`, `WriteFile`, `Stat`, `ReadDir`, `Mkdir*`, `Remove*`, `Rename`, `CreateTemp`, `Stdin`/`Stdout`/`Stderr`), the `bufio` part (`NewReader`, `NewWriter`, `NewScanner`) and `Buffer` |
+| `std/http` | HTTP/1.1 client (`Get`, `Head`, `Post`, `PostForm`, `Client.Do`, redirects, timeouts) and server (`ServeMux` with Go 1.22 patterns such as `"GET /users/{id}"`, `ListenAndServe`, `Server`, `FileServer`, `StripPrefix`, `Redirect`, keep-alive), `URL`, `Values`, `Header` |
+| `std/udp` | `Listen`, `Dial`, `Conn` (`ReadFrom`, `WriteTo`, `Read`, `Write`, timeouts), `ResolveAddr` |
 | `std/sync` | `WaitGroup` (`Add`, `Done`, `Wait`), `Mutex` (`Lock`, `Unlock`) |
-| `std/time` | `Duration`, `Nanosecond` … `Hour`, `Sleep`, `Now`, `Since`, `Milliseconds()`, `Seconds()` |
+| `std/time` | `Duration`, `Nanosecond` … `Hour`, `Sleep`, `Now`, `Since`, `UnixNano`, `Milliseconds()`, `Seconds()` |
 
-The standard library is intentionally small for now. Go modules fill the gaps
-through the bridge.
+`strings`, `strconv`, `io`, `http` and `udp` are written in Gocpy itself
+(`stdlib/`) and ship inside the compiler, so go-to-definition in the editor
+opens their sources. Go modules fill the remaining gaps through the bridge.
+
+```gocpy
+package main
+
+import (
+    "std/fmt"
+    "std/http"
+    "std/io"
+)
+
+func main() {
+    http.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "hello, %s\n", r.PathValue("name"))
+    })
+    http.Handle("/files/", http.StripPrefix("/files", http.FileServer("./www")))
+    io.WriteFile("started.txt", []byte("ok\n"), 0o644)
+    fmt.Println(http.ListenAndServe(":8080", nil))
+}
+```
 
 ## Command-line tool
 
@@ -598,6 +623,13 @@ highlighting and navigation in the rest of the file.
 - The Go bridge does not yet support Go types, methods, package variables,
   variadic or generic functions, slices other than `[]byte`, maps, channels or
   callbacks.
+- `std/http` has no HTTPS/TLS (use a Go module through the bridge). Server
+  responses are buffered and sent when the handler returns (no streaming or
+  `Flush`), client bodies are read into memory, and `Client.Timeout` applies
+  to each network operation rather than to the whole request.
+- `fmt`: `%+v` and `%#v` print like `%v`. `strings.ToUpper`/`ToLower` cover
+  Latin, Greek and Cyrillic only. There is no `[]rune(s)` conversion and no
+  `time.After`.
 - No cross-compilation yet: `build.targets` other than the host are ignored
   with a warning.
 
@@ -607,6 +639,7 @@ highlighting and navigation in the rest of the file.
 cmd/gocpy/         command-line tool
 internal/          compiler, loader, modules, Go bridge, language server
 runtime/c/         C runtime
+stdlib/            standard library packages written in Gocpy
 docs/              grammar and module reference
 examples/          example programs (stage2 … stage7, modules, golocal, feed)
 editors/vscode/    VS Code extension

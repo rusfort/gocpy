@@ -4,6 +4,7 @@ package parser
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -330,7 +331,40 @@ func (p *parser) parseGenDecl(annots ast.Annotations) *ast.GenDecl {
 		d.Specs = append(d.Specs, spec())
 	}
 	p.expectSemi()
+	if d.Tok == token.CONST {
+		expandConstGroup(d)
+	}
 	return d
+}
+
+// expandConstGroup implements iota and implicit repetition in const groups:
+// a spec without values repeats the type and expressions of the previous
+// spec, and iota is the index of the spec in the group.
+func expandConstGroup(d *ast.GenDecl) {
+	var prevType ast.Expr
+	var prevVals []ast.Expr // pristine copies, iota not yet replaced
+	for i, sp := range d.Specs {
+		s, ok := sp.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		if len(s.Values) == 0 && s.Type == nil && prevVals != nil {
+			s.Type = ast.CloneExpr(prevType, true)
+			for _, v := range prevVals {
+				s.Values = append(s.Values, ast.CloneExpr(v, true))
+			}
+		} else if len(s.Values) > 0 {
+			prevType = s.Type
+			prevVals = nil
+			for _, v := range s.Values {
+				prevVals = append(prevVals, ast.CloneExpr(v, false))
+			}
+		}
+		n := strconv.Itoa(i)
+		for j := range s.Values {
+			ast.ReplaceIota(&s.Values[j], n)
+		}
+	}
 }
 
 func (p *parser) parseTypeSpec() *ast.TypeSpec {

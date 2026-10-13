@@ -1,0 +1,33 @@
+package main
+
+import "std/fmt"
+
+type Kind int
+
+const (
+	KA Kind = iota
+	KB
+	KC
+)
+
+const (
+	_   = iota
+	KiB = 1 << (10 * iota)
+	MiB
+	GiB
+)
+
+const (
+	F1 = 1 << iota
+	F2
+	F3
+	F4 = 100
+	F5
+)
+
+const One = iota + 1
+
+func main() {
+	var k Kind = KC
+	fmt.Println(KA, KB, k, KiB, MiB, GiB, F1, F2, F3, F4, F5, One)
+}

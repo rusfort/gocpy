@@ -380,3 +380,65 @@ func TestTextConv(t *testing.T) {
 		t.Errorf("parseChain = %+v", ch)
 	}
 }
+
+const stdSrc = `package main
+
+import (
+    "std/fmt"
+    "std/http"
+    "std/io"
+)
+
+func main() {
+    data, err := io.ReadFile("x.txt")
+    fmt.Println(len(data), err)
+    resp, gerr := http.Get("http://127.0.0.1:1/")
+    fmt.Println(resp, gerr)
+}
+`
+
+func TestLSPStdSources(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOCPY_CACHE", t.TempDir())
+	t.Setenv("GOCPY_LSP_NO_GO", "1")
+	os.WriteFile(filepath.Join(dir, "gocpy.yml"), []byte("module: example.com/app\n"), 0o644)
+	mainPath := filepath.Join(dir, "main.gocpy")
+	os.WriteFile(mainPath, []byte(stdSrc), 0o644)
+	c := startClient(t, dir)
+	uri := c.open(mainPath)
+	if d := c.waitDiags(uri); len(d) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", d)
+	}
+	var hv struct{ Contents MarkupContent }
+	c.call("textDocument/hover", tdp(uri, posOf(t, stdSrc, "Get(", 1)), &hv)
+	if !strings.Contains(hv.Contents.Value, "func Get(rawURL string) (*Response, error)") || !strings.Contains(hv.Contents.Value, "GET request") {
+		t.Errorf("hover http.Get: %q", hv.Contents.Value)
+	}
+	var one Location
+	c.call("textDocument/definition", tdp(uri, posOf(t, stdSrc, "ReadFile(", 1)), &one)
+	if !strings.HasSuffix(uriToPath(one.URI), filepath.Join("io", "file.gocpy")) {
+		t.Errorf("definition io.ReadFile: %+v", one)
+	}
+	src2 := strings.Replace(stdSrc, "    fmt.Println(resp, gerr)", "    fmt.Println(resp, gerr)\n    io.", 1)
+	c.change(uri, 2, src2)
+	var cl struct{ Items []CompletionItem }
+	c.call("textDocument/completion", tdp(uri, posOf(t, src2, "    io.\n", 7)), &cl)
+	got := map[string]bool{}
+	for _, it := range cl.Items {
+		got[it.Label] = true
+	}
+	if !got["ReadFile"] || !got["NewScanner"] || !got["File"] || got["sysOpen"] {
+		t.Errorf("io. completion: %v", got)
+	}
+	src3 := strings.Replace(stdSrc, `"std/io"`, `"std/`, 1)
+	c.change(uri, 3, src3)
+	cl.Items = nil
+	c.call("textDocument/completion", tdp(uri, posOf(t, src3, `"std/`, 5)), &cl)
+	got = map[string]bool{}
+	for _, it := range cl.Items {
+		got[it.Label] = true
+	}
+	if !got["std/http"] || !got["std/udp"] || !got["std/fmt"] {
+		t.Errorf("import completion: %v", got)
+	}
+}

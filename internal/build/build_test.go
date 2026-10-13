@@ -148,3 +148,53 @@ func main() { fmt.Println(mix(2, 5)) }
 		t.Errorf("got %q", out)
 	}
 }
+
+func TestStdinScan(t *testing.T) {
+	gc := gcMode(t)
+	dir := t.TempDir()
+	src := `package main
+
+import (
+	"std/fmt"
+	"std/io"
+)
+
+func main() {
+	var name string
+	var age int
+	n, err := fmt.Scan(&name, &age)
+	fmt.Println(n, err, name, age)
+	var x float64
+	var w string
+	n, err = fmt.Scanln(&x, &w)
+	fmt.Println(n, err, x, w)
+	var a int
+	var b int
+	n, err = fmt.Scanf("%d-%d\n", &a, &b)
+	fmt.Println(n, err, a+b)
+	sc := io.NewScanner(io.Stdin)
+	for sc.Scan() {
+		fmt.Printf("line %q\n", sc.Text())
+	}
+	n, err = fmt.Scan(&a)
+	fmt.Println(n, err)
+}
+`
+	os.WriteFile(filepath.Join(dir, "main.gocpy"), []byte(src), 0o644)
+	os.WriteFile(filepath.Join(dir, "gocpy.yml"), []byte("module: test\nbuild:\n  gc: "+gc+"\n"), 0o644)
+	var log bytes.Buffer
+	res, err := Build(dir, Options{Out: filepath.Join(dir, "prog"), Log: &log})
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, log.String())
+	}
+	cmd := exec.Command(res.Binary)
+	cmd.Stdin = strings.NewReader("Ann 31\n2.5 kg\n3-4\nfirst line\nsecond\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := "2 <nil> Ann 31\n2 <nil> 2.5 kg\n2 <nil> 7\nline \"first line\"\nline \"second\"\n0 EOF\n"
+	if string(out) != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}

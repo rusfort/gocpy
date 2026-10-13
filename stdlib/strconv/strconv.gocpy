@@ -1,0 +1,393 @@
+// Package strconv converts between strings and basic data types.
+package strconv
+
+import (
+	"std/errors"
+	"std/fmt"
+)
+
+// ErrSyntax indicates that a value does not have the right syntax.
+var ErrSyntax = errors.New("invalid syntax")
+
+// ErrRange indicates that a value is out of range for the target type.
+var ErrRange = errors.New("value out of range")
+
+// NumError records a failed conversion.
+type NumError struct {
+	Func string // the failing function (ParseInt, Atoi...)
+	Num  string // the input
+	Err  error  // ErrSyntax, ErrRange or another error
+}
+
+func (e *NumError) Error() string {
+	return "strconv." + e.Func + ": parsing " + Quote(e.Num) + ": " + e.Err.Error()
+}
+
+func (e *NumError) Unwrap() error {
+	return e.Err
+}
+
+// IntSize is the size in bits of an int.
+const IntSize = 64
+
+const digitChars = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+// FormatUint returns the representation of u in the given base (2..36).
+func FormatUint(u uint64, base int) string {
+	if base < 2 || base > 36 {
+		base = 10
+	}
+	if u == 0 {
+		return "0"
+	}
+	var buf [64]byte
+	i := 64
+	b := uint64(base)
+	for u > 0 {
+		i--
+		buf[i] = digitChars[u%b]
+		u /= b
+	}
+	return string(buf[i:])
+}
+
+// FormatInt returns the representation of i in the given base (2..36).
+func FormatInt(i int64, base int) string {
+	if i < 0 {
+		return "-" + FormatUint(uint64(-(i+1))+1, base)
+	}
+	return FormatUint(uint64(i), base)
+}
+
+// Itoa is FormatInt(int64(i), 10).
+func Itoa(i int) string {
+	return FormatInt(int64(i), 10)
+}
+
+// FormatBool returns "true" or "false".
+func FormatBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// ParseBool accepts 1, t, T, TRUE, true, True, 0, f, F, FALSE, false, False.
+func ParseBool(str string) (bool, error) {
+	switch str {
+	case "1", "t", "T", "TRUE", "true", "True":
+		return true, nil
+	case "0", "f", "F", "FALSE", "false", "False":
+		return false, nil
+	}
+	return false, &NumError{Func: "ParseBool", Num: str, Err: ErrSyntax}
+}
+
+func digitVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'z':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'Z':
+		return int(c-'A') + 10
+	}
+	return 99
+}
+
+func maxUint(bitSize int) uint64 {
+	if bitSize >= 64 || bitSize <= 0 {
+		return uint64(0xFFFFFFFFFFFFFFFF)
+	}
+	return (uint64(1) << uint(bitSize)) - 1
+}
+
+// parseDigits parses an unsigned number; base 0 detects 0x, 0o, 0b and 0
+// prefixes and allows underscores. code: 0 ok, 1 syntax, 2 range.
+func parseDigits(s string, base int, bitSize int) (uint64, int) {
+	if s == "" {
+		return 0, 1
+	}
+	underscores := false
+	if base == 0 {
+		base = 10
+		underscores = true
+		if s[0] == '0' {
+			if len(s) >= 3 && (s[1] == 'x' || s[1] == 'X') {
+				base = 16
+				s = s[2:]
+			} else if len(s) >= 3 && (s[1] == 'o' || s[1] == 'O') {
+				base = 8
+				s = s[2:]
+			} else if len(s) >= 3 && (s[1] == 'b' || s[1] == 'B') {
+				base = 2
+				s = s[2:]
+			} else if len(s) > 1 {
+				base = 8
+				s = s[1:]
+			}
+		}
+	} else if base < 2 || base > 36 {
+		return 0, 1
+	}
+	limit := maxUint(bitSize)
+	var v uint64 = 0
+	overflow := false
+	b := uint64(base)
+	sawDigit := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '_' && underscores {
+			continue
+		}
+		d := digitVal(c)
+		if d >= base {
+			return 0, 1
+		}
+		sawDigit = true
+		if overflow {
+			continue
+		}
+		if v > (uint64(0xFFFFFFFFFFFFFFFF)-uint64(d))/b {
+			overflow = true
+			continue
+		}
+		v = v*b + uint64(d)
+		if v > limit {
+			overflow = true
+		}
+	}
+	if !sawDigit {
+		return 0, 1
+	}
+	if overflow {
+		return limit, 2
+	}
+	return v, 0
+}
+
+// ParseUint is like ParseInt for unsigned numbers.
+func ParseUint(s string, base int, bitSize int) (uint64, error) {
+	v, code := parseDigits(s, base, bitSize)
+	if code == 1 {
+		return 0, &NumError{Func: "ParseUint", Num: s, Err: ErrSyntax}
+	}
+	if code == 2 {
+		return v, &NumError{Func: "ParseUint", Num: s, Err: ErrRange}
+	}
+	return v, nil
+}
+
+func parseSigned(s string, base int, bitSize int, fn string) (int64, error) {
+	if s == "" {
+		return 0, &NumError{Func: fn, Num: s, Err: ErrSyntax}
+	}
+	body := s
+	neg := false
+	if s[0] == '+' || s[0] == '-' {
+		neg = s[0] == '-'
+		body = s[1:]
+	}
+	if bitSize <= 0 || bitSize > 64 {
+		bitSize = 64
+	}
+	u, code := parseDigits(body, base, 64)
+	if code == 1 {
+		return 0, &NumError{Func: fn, Num: s, Err: ErrSyntax}
+	}
+	cutoff := uint64(1) << uint(bitSize-1)
+	if !neg && (code == 2 || u >= cutoff) {
+		return int64(cutoff - 1), &NumError{Func: fn, Num: s, Err: ErrRange}
+	}
+	if neg && (code == 2 || u > cutoff) {
+		return -int64(cutoff-1) - 1, &NumError{Func: fn, Num: s, Err: ErrRange}
+	}
+	if neg {
+		if u == cutoff {
+			return -int64(cutoff-1) - 1, nil
+		}
+		return -int64(u), nil
+	}
+	return int64(u), nil
+}
+
+// ParseInt interprets s in the given base (0, 2..36) and bit size (0..64).
+// Base 0 accepts the prefixes 0x, 0o, 0b and 0 and underscores.
+func ParseInt(s string, base int, bitSize int) (int64, error) {
+	return parseSigned(s, base, bitSize, "ParseInt")
+}
+
+// Atoi is ParseInt(s, 10, 0) converted to int.
+func Atoi(s string) (int, error) {
+	v, err := parseSigned(s, 10, 64, "Atoi")
+	return int(v), err
+}
+
+@extern("gocpy_strconv_parse_float")
+func parseFloatC(s string, bitSize int, code []int64) float64
+
+@extern("gocpy_strconv_format_float")
+func formatFloatC(f float64, fmtc int, prec int, bitSize int) string
+
+// ParseFloat converts s to a float64 (bitSize 32 rounds to float32). It
+// accepts decimal and hexadecimal forms, "inf", "infinity" and "nan".
+func ParseFloat(s string, bitSize int) (float64, error) {
+	code := []int64{0}
+	v := parseFloatC(s, bitSize, code)
+	if code[0] == 1 {
+		return 0, &NumError{Func: "ParseFloat", Num: s, Err: ErrSyntax}
+	}
+	if code[0] == 2 {
+		return v, &NumError{Func: "ParseFloat", Num: s, Err: ErrRange}
+	}
+	return v, nil
+}
+
+// FormatFloat formats f with the format 'e', 'E', 'f', 'g' or 'G' and the
+// given precision; prec -1 uses the fewest digits that read back exactly.
+func FormatFloat(f float64, fmtc byte, prec int, bitSize int) string {
+	return formatFloatC(f, int(fmtc), prec, bitSize)
+}
+
+// Quote returns a double-quoted Go string literal for s.
+func Quote(s string) string {
+	return fmt.Sprintf("%q", s)
+}
+
+// QuoteRune returns a single-quoted Go character literal for r.
+func QuoteRune(r rune) string {
+	return fmt.Sprintf("%q", r)
+}
+
+func hexVal(c byte) int {
+	d := digitVal(c)
+	if d < 16 {
+		return d
+	}
+	return -1
+}
+
+// Unquote interprets s as a double-quoted, single-quoted or back-quoted Go
+// literal and returns the value.
+func Unquote(s string) (string, error) {
+	k := len(s)
+	if k < 2 || s[0] != s[k-1] {
+		return "", ErrSyntax
+	}
+	q := s[0]
+	body := s[1 : k-1]
+	if q == '`' {
+		if indexByte(body, '`') >= 0 {
+			return "", ErrSyntax
+		}
+		return body, nil
+	}
+	if q != '"' && q != '\'' {
+		return "", ErrSyntax
+	}
+	var out []byte
+	runes := 0
+	i := 0
+	for i < len(body) {
+		c := body[i]
+		if c == q || c == '\n' {
+			return "", ErrSyntax
+		}
+		if c != '\\' {
+			out = append(out, c)
+			if c < 0x80 || c >= 0xC0 {
+				runes++
+			}
+			i++
+			continue
+		}
+		if i+1 >= len(body) {
+			return "", ErrSyntax
+		}
+		e := body[i+1]
+		i += 2
+		runes++
+		switch e {
+		case 'n':
+			out = append(out, '\n')
+		case 't':
+			out = append(out, '\t')
+		case 'r':
+			out = append(out, '\r')
+		case 'a':
+			out = append(out, 7)
+		case 'b':
+			out = append(out, 8)
+		case 'f':
+			out = append(out, 12)
+		case 'v':
+			out = append(out, 11)
+		case '\\':
+			out = append(out, '\\')
+		case '\'', '"':
+			if e != q {
+				return "", ErrSyntax
+			}
+			out = append(out, e)
+		case 'x', 'u', 'U':
+			width := 2
+			if e == 'u' {
+				width = 4
+			} else if e == 'U' {
+				width = 8
+			}
+			if i+width > len(body) {
+				return "", ErrSyntax
+			}
+			v := 0
+			for j := 0; j < width; j++ {
+				h := hexVal(body[i+j])
+				if h < 0 {
+					return "", ErrSyntax
+				}
+				v = v*16 + h
+			}
+			i += width
+			if e == 'x' {
+				out = append(out, byte(v))
+			} else {
+				if v > 0x10FFFF || (v >= 0xD800 && v < 0xE000) {
+					return "", ErrSyntax
+				}
+				out = append(out, []byte(string(rune(v)))...)
+			}
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			if i+2 > len(body) {
+				return "", ErrSyntax
+			}
+			v := int(e - '0')
+			for j := 0; j < 2; j++ {
+				d := body[i+j]
+				if d < '0' || d > '7' {
+					return "", ErrSyntax
+				}
+				v = v*8 + int(d-'0')
+			}
+			if v > 255 {
+				return "", ErrSyntax
+			}
+			i += 2
+			out = append(out, byte(v))
+		default:
+			return "", ErrSyntax
+		}
+	}
+	if q == '\'' && runes != 1 {
+		return "", ErrSyntax
+	}
+	return string(out), nil
+}
+
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}

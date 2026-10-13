@@ -1,0 +1,23 @@
+write: <nil>
+"line1\nline2\r\nlast" <nil>
+true
+[line1][line2][last]<nil>
+close $DIR/a.txt: file already closed
+open $DIR/missing: no such file or directory true true
+op: open
+<nil> <nil> a.txt 22 false true
+<nil>
+<nil>
+b.txt:false y:true <nil>
+<nil> true false
+remove $DIR/x: directory not empty true
+<nil> 3 4 3456
+"alpha " <nil> "beta" <nil> "gamma" <nil> "" EOF
+buffered: hello 42 world
+abcd <nil>
+5 unexpected EOF
+one,two,three,four,4
+copied
+7 <nil>
+<nil> true true
+false

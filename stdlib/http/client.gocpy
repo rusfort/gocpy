@@ -1,0 +1,237 @@
+package http
+
+import (
+	"std/errors"
+	"std/io"
+	"std/strconv"
+	"std/strings"
+	"std/time"
+)
+
+// ErrUseLastResponse can be returned by Client.CheckRedirect to stop
+// following redirects and return the last response.
+var ErrUseLastResponse = errors.New("net/http: use last response")
+
+// ErrHTTPSNotSupported is returned for https:// URLs: std/http has no TLS
+// yet.
+var ErrHTTPSNotSupported = errors.New("https is not supported yet (std/http has no TLS); use http:// or a Go module through the bridge")
+
+// Client sends HTTP/1.1 requests. The zero value is ready to use.
+type Client struct {
+	// Timeout limits connecting and every read and write (not the whole
+	// exchange); 0 means no limit.
+	Timeout time.Duration
+	// CheckRedirect decides whether to follow a redirect; nil follows up to
+	// 10 redirects.
+	CheckRedirect func(req *Request, via []*Request) error
+}
+
+// DefaultClient is used by Get, Head, Post and PostForm.
+var DefaultClient = &Client{}
+
+// Get issues a GET request with DefaultClient.
+func Get(rawURL string) (*Response, error) {
+	return DefaultClient.Get(rawURL)
+}
+
+// Head issues a HEAD request with DefaultClient.
+func Head(rawURL string) (*Response, error) {
+	return DefaultClient.Head(rawURL)
+}
+
+// Post issues a POST request with DefaultClient.
+func Post(rawURL string, contentType string, body io.Reader) (*Response, error) {
+	return DefaultClient.Post(rawURL, contentType, body)
+}
+
+// PostForm posts URL-encoded form data with DefaultClient.
+func PostForm(rawURL string, data Values) (*Response, error) {
+	return DefaultClient.PostForm(rawURL, data)
+}
+
+// Get issues a GET request.
+func (c *Client) Get(rawURL string) (*Response, error) {
+	req, err := NewRequest(MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.Do(req)
+}
+
+// Head issues a HEAD request.
+func (c *Client) Head(rawURL string) (*Response, error) {
+	req, err := NewRequest(MethodHead, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.Do(req)
+}
+
+// Post issues a POST request with the given Content-Type.
+func (c *Client) Post(rawURL string, contentType string, body io.Reader) (*Response, error) {
+	req, err := NewRequest(MethodPost, rawURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	return c.Do(req)
+}
+
+// PostForm posts URL-encoded form data.
+func (c *Client) PostForm(rawURL string, data Values) (*Response, error) {
+	return c.Post(rawURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+}
+
+func methodName(m string) string {
+	if m == "" {
+		return "Get"
+	}
+	return m[:1] + strings.ToLower(m[1:])
+}
+
+// Do sends the request and returns the response, following redirects.
+// The whole body is received before Do returns; closing it is optional.
+func (c *Client) Do(req *Request) (*Response, error) {
+	var via []*Request
+	cur := req
+	for {
+		resp, err := c.send(cur)
+		if err != nil {
+			return nil, &URLError{Op: methodName(cur.Method), URL: cur.URL.String(), Err: err}
+		}
+		code := resp.StatusCode
+		loc := resp.Header.Get("Location")
+		if loc == "" || (code != 301 && code != 302 && code != 303 && code != 307 && code != 308) {
+			return resp, nil
+		}
+		next := cur.URL.ResolveReference(loc)?
+		method := cur.Method
+		keepBody := code == 307 || code == 308
+		if !keepBody && method != MethodHead {
+			method = MethodGet
+		}
+		nreq := &Request{Method: method, URL: next, Proto: "HTTP/1.1", Header: cur.Header.Clone(), Host: next.Host}
+		if keepBody && cur.hasBody {
+			nreq.bodyData = cur.bodyData
+			nreq.hasBody = true
+			nreq.ContentLength = cur.ContentLength
+			nreq.Body = io.NopCloser(io.NewBuffer(cur.bodyData))
+		} else {
+			nreq.Header.Del("Content-Type")
+			nreq.Header.Del("Content-Length")
+		}
+		if next.Host != cur.URL.Host {
+			nreq.Header.Del("Authorization")
+			nreq.Header.Del("Cookie")
+		}
+		via = append(via, cur)
+		if c.CheckRedirect != nil {
+			cerr := c.CheckRedirect(nreq, via)
+			if cerr == ErrUseLastResponse {
+				return resp, nil
+			}
+			if cerr != nil {
+				return resp, &URLError{Op: methodName(cur.Method), URL: next.String(), Err: cerr}
+			}
+		} else if len(via) >= 10 {
+			return resp, &URLError{Op: methodName(cur.Method), URL: next.String(), Err: errors.New("stopped after 10 redirects")}
+		}
+		cur = nreq
+	}
+}
+
+// send performs one exchange on a new connection.
+func (c *Client) send(req *Request) (*Response, error) {
+	u := req.URL
+	if u.Scheme == "https" {
+		return nil, ErrHTTPSNotSupported
+	}
+	if u.Scheme != "http" {
+		return nil, errors.New("unsupported protocol scheme " + strconv.Quote(u.Scheme))
+	}
+	if u.Host == "" {
+		return nil, errors.New("http: no Host in request URL")
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "80"
+	}
+	portNum, perr := strconv.Atoi(port)
+	if perr != nil {
+		return nil, errors.New("invalid port " + strconv.Quote(port))
+	}
+	conn := dialTCP(joinHostPort(host, portNum), c.Timeout)?
+	defer conn.Close()
+
+	var b strings.Builder
+	b.WriteString(req.Method)
+	b.WriteString(" ")
+	b.WriteString(u.RequestURI())
+	b.WriteString(" HTTP/1.1\r\nHost: ")
+	hostHeader := req.Host
+	if hostHeader == "" {
+		hostHeader = u.Host
+	}
+	b.WriteString(hostHeader)
+	b.WriteString("\r\n")
+	h := req.Header.Clone()
+	if !h.Has("User-Agent") {
+		h.Set("User-Agent", "Gocpy-http-client/1.1")
+	}
+	h.Set("Connection", "close")
+	h.Del("Host")
+	h.Del("Transfer-Encoding")
+	if req.hasBody || req.Method == MethodPost || req.Method == MethodPut || req.Method == MethodPatch {
+		h.Set("Content-Length", strconv.Itoa(len(req.bodyData)))
+	}
+	if u.User != "" && !h.Has("Authorization") {
+		h.Set("Authorization", "Basic "+base64Encode([]byte(userinfoDecoded(u.User))))
+	}
+	h.writeTo(&b)
+	b.WriteString("\r\n")
+	head := []byte(b.String())
+	_, werr := conn.Write(append(head, req.bodyData...))
+	if werr != nil {
+		return nil, werr
+	}
+	br := io.NewReader(conn)
+	return readResponse(br, req)
+}
+
+func userinfoDecoded(s string) string {
+	d, err := PathUnescape(s)
+	if err != nil {
+		return s
+	}
+	return d
+}
+
+const b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+func base64Encode(data []byte) string {
+	var b strings.Builder
+	for i := 0; i < len(data); i += 3 {
+		var v uint32 = uint32(data[i]) << 16
+		rem := len(data) - i
+		if rem > 1 {
+			v |= uint32(data[i+1]) << 8
+		}
+		if rem > 2 {
+			v |= uint32(data[i+2])
+		}
+		b.WriteByte(b64chars[(v>>18)&63])
+		b.WriteByte(b64chars[(v>>12)&63])
+		if rem > 1 {
+			b.WriteByte(b64chars[(v>>6)&63])
+		} else {
+			b.WriteByte('=')
+		}
+		if rem > 2 {
+			b.WriteByte(b64chars[v&63])
+		} else {
+			b.WriteByte('=')
+		}
+	}
+	return b.String()
+}

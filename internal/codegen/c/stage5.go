@@ -637,9 +637,48 @@ func (g *gen) typeinfoDefs(b *strings.Builder) {
 			fmt.Fprintf(b, "static const gocpy_method gocpy_tim_%s[] = { %s };\n", id, strings.Join(es, ", "))
 			mt = "gocpy_tim_" + id
 		}
-		fmt.Fprintf(b, "const gocpy_typeinfo gocpy_ti_%s = { %s, gocpy_tifmt_%s, sizeof(%s), %v, %s, %d, %s };\n\n",
-			id, cString(g.typeName(t)), id, ct, ptrShaped(t), eq, len(ms), mt)
+		kind, elem, idesc := g.tiKind(t)
+		fmt.Fprintf(b, "const gocpy_typeinfo gocpy_ti_%s = { %s, gocpy_tifmt_%s, sizeof(%s), %v, %s, %d, %s, %s, %s, %s };\n\n",
+			id, cString(g.typeName(t)), id, ct, ptrShaped(t), eq, len(ms), mt, kind, elem, idesc)
 	}
+}
+
+// tiKind returns the kind, element typeinfo and interface descriptor fields
+// of the typeinfo of t (used by fmt verbs, Scan and errors.As).
+func (g *gen) tiKind(t types.Type) (kind, elem, idesc string) {
+	kind, elem, idesc = "GOCPY_K_OTHER", "NULL", "NULL"
+	switch u := t.Underlying().(type) {
+	case *types.Basic:
+		b := types.Default(u).(*types.Basic)
+		switch {
+		case b.Kind == types.Bool:
+			kind = "GOCPY_K_BOOL"
+		case b.IsString():
+			kind = "GOCPY_K_STRING"
+		case b.IsFloat():
+			kind = "GOCPY_K_FLOAT"
+		case b.IsUnsigned():
+			kind = "GOCPY_K_UINT"
+		case b.IsInteger():
+			kind = "GOCPY_K_INT"
+		}
+	case *types.Pointer:
+		kind, elem = "GOCPY_K_PTR", g.tiRefT(u.Elem)
+	case *types.Slice:
+		kind, elem = "GOCPY_K_SLICE", g.tiRefT(u.Elem)
+	case *types.Array:
+		kind, elem = "GOCPY_K_ARRAY", g.tiRefT(u.Elem)
+	case *types.Interface:
+		kind = "GOCPY_K_IFACE"
+		if !u.IsConstraint() {
+			idesc = g.idescRef(t)
+		}
+	case *types.Struct:
+		kind = "GOCPY_K_STRUCT"
+	case *types.Map:
+		kind = "GOCPY_K_MAP"
+	}
+	return
 }
 
 // dynFmt formats a dynamic value like Go's fmt: Error() first, then String().

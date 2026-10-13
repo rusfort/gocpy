@@ -1,0 +1,218 @@
+package http
+
+import (
+	"std/errors"
+	"std/io"
+	"std/strconv"
+	"std/strings"
+	"std/sync"
+	"std/time"
+)
+
+@extern("gocpy_sys_tcp_listen")
+func sysListen(host string, port int) int
+
+@extern("gocpy_sys_tcp_accept")
+func sysAccept(fd int) int
+
+@extern("gocpy_sys_tcp_dial")
+func sysDial(host string, port int, timeoutMs int) int
+
+@extern("gocpy_sys_read")
+func sysRead(fd int, p []byte) int
+
+@extern("gocpy_sys_write")
+func sysWrite(fd int, p []byte) int
+
+@extern("gocpy_sys_close")
+func sysClose(fd int) int
+
+@extern("gocpy_sys_sock_ip")
+func sockIP(fd int, peer bool) string
+
+@extern("gocpy_sys_sock_port")
+func sockPort(fd int, peer bool) int
+
+@extern("gocpy_sys_set_timeout")
+func setTimeout(fd int, readMs int, writeMs int) int
+
+@extern("gocpy_sys_shutdown_write")
+func shutdownWrite(fd int) int
+
+// OpError is a network error ("dial tcp 127.0.0.1:1: connection refused").
+type OpError struct {
+	Op   string
+	Addr string
+	Err  error
+}
+
+func (e *OpError) Error() string {
+	if e.Op == "connect" {
+		return "connect: " + e.Err.Error()
+	}
+	if e.Addr == "" {
+		return e.Op + " tcp: " + e.Err.Error()
+	}
+	return e.Op + " tcp " + e.Addr + ": " + e.Err.Error()
+}
+
+func (e *OpError) Unwrap() error {
+	return e.Err
+}
+
+// Timeout reports whether the operation timed out.
+func (e *OpError) Timeout() bool {
+	return io.IsTimeout(e.Err)
+}
+
+func msOf(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	ms := int(d.Milliseconds())
+	if ms == 0 {
+		return 1
+	}
+	return ms
+}
+
+func joinHostPort(host string, port int) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:" + strconv.Itoa(port)
+	}
+	return host + ":" + strconv.Itoa(port)
+}
+
+func parseHostPort(addr string) (string, int, error) {
+	i := strings.LastIndex(addr, ":")
+	if i < 0 {
+		return "", 0, errors.New("address " + addr + ": missing port in address")
+	}
+	host := addr[:i]
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	port, err := strconv.Atoi(addr[i+1:])
+	if err != nil || port < 0 || port > 65535 {
+		return "", 0, errors.New("address " + addr + ": invalid port")
+	}
+	return host, port, nil
+}
+
+// tcpConn is a connected TCP socket.
+type tcpConn struct {
+	fd     int
+	closed bool
+	mu     sync.Mutex
+}
+
+func (c *tcpConn) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	r := sysRead(c.fd, p)
+	if r < 0 {
+		return 0, &OpError{Op: "read", Err: io.Errno(-r)}
+	}
+	if r == 0 {
+		return 0, io.EOF
+	}
+	return r, nil
+}
+
+func (c *tcpConn) Write(p []byte) (int, error) {
+	r := sysWrite(c.fd, p)
+	if r < 0 {
+		return 0, &OpError{Op: "write", Err: io.Errno(-r)}
+	}
+	return r, nil
+}
+
+func (c *tcpConn) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.mu.Unlock()
+	sysClose(c.fd)
+	return nil
+}
+
+func dialTCP(addr string, timeout time.Duration) (*tcpConn, error) {
+	host, port := parseHostPort(addr)?
+	fd := sysDial(host, port, msOf(timeout))
+	if fd < 0 {
+		e := io.Errno(-fd)
+		msg := e.Error()
+		if msg == "no such host" {
+			return nil, &OpError{Op: "dial", Err: errors.New("lookup " + host + ": no such host")}
+		}
+		if e.Timeout() {
+			return nil, &OpError{Op: "dial", Addr: addr, Err: e}
+		}
+		return nil, &OpError{Op: "dial", Addr: addr, Err: &OpError{Op: "connect", Err: e}}
+	}
+	c := &tcpConn{fd: fd}
+	if timeout > 0 {
+		setTimeout(fd, msOf(timeout), msOf(timeout))
+	}
+	return c, nil
+}
+
+// Listener is a listening TCP socket.
+type Listener struct {
+	fd     int
+	closed bool
+	mu     sync.Mutex
+}
+
+// Listen opens a TCP listener on addr ("host:port"; ":8080" listens on all
+// interfaces, ":0" picks a free port: see Port).
+func Listen(addr string) (*Listener, error) {
+	host, port := parseHostPort(addr)?
+	fd := sysListen(host, port)
+	if fd < 0 {
+		return nil, &OpError{Op: "listen", Addr: addr, Err: io.Errno(-fd)}
+	}
+	return &Listener{fd: fd}, nil
+}
+
+// Addr returns the local address ("127.0.0.1:8080", "[::]:8080").
+func (l *Listener) Addr() string {
+	return joinHostPort(sockIP(l.fd, false), sockPort(l.fd, false))
+}
+
+// Port returns the local port.
+func (l *Listener) Port() int {
+	return sockPort(l.fd, false)
+}
+
+// Close stops listening; a blocked Serve returns ErrServerClosed.
+func (l *Listener) Close() error {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return nil
+	}
+	l.closed = true
+	l.mu.Unlock()
+	sysClose(l.fd)
+	return nil
+}
+
+func (l *Listener) isClosed() bool {
+	l.mu.Lock()
+	c := l.closed
+	l.mu.Unlock()
+	return c
+}
+
+func (l *Listener) accept() (int, error) {
+	fd := sysAccept(l.fd)
+	if fd < 0 {
+		return -1, &OpError{Op: "accept", Addr: l.Addr(), Err: io.Errno(-fd)}
+	}
+	return fd, nil
+}

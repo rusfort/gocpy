@@ -1,0 +1,27 @@
+200 200 OK hello, Gocpy text/plain; charset=utf-8 12
+200 {"id": "42"} application/json
+201 ping-pong
+405 POST
+200 hello, redirected true
+200 static:/static/
+404 "404 page not found\n"
+200 <!doctype html><p>root</p> text/html; charset=utf-8
+200 hello, форма & co
+200 8 8
+Get "https://example.com/": https is not supported yet (std/http has no TLS); use http:// or a Go module through the bridge
+Get "http://127.0.0.1:1/": dial tcp 127.0.0.1:1: connect: connection refused
+http example.com:8080 example.com 8080 /a b/c x=1&y=%D0%B6 frag ж http://user@example.com:8080/a%20b/c?x=1&y=%D0%B6#frag
+a+b%26c%3Dd%2F%D0%B6 Not Found X-Forwarded-For
+Thu, 01 Jan 1970 00:00:00 GMT Tue, 14 Nov 2023 22:13:20 GMT
+http: Server closed
+127.0.0.1 true
+<nil>
+echo:ping 0 <nil>
+echo:ping 1 <nil>
+echo:ping 2 <nil>
+true
+read true true
+address 127.0.0.1: missing port in address
+server stop: read udp: use of closed network connection
+stopped: true
+close udp: use of closed network connection

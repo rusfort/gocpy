@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -451,10 +452,53 @@ func run(cc string, args []string, opts Options) error {
 	cmd.Stdout = &stderr
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("C compiler failed (%v):\n%s", err, stderr.String())
+		return fmt.Errorf("C compiler failed (%v):\n%s", err, ccErrors(stderr.String()))
 	}
 	if stderr.Len() > 0 && opts.Verbose {
 		opts.logf("%s", stderr.String())
 	}
 	return nil
+}
+
+var ccDiag = regexp.MustCompile(`^\S.*:\d+:(\d+:)? (warning|error|fatal error|note):`)
+
+// ccErrors drops warnings (with their notes and source snippets) from C
+// compiler output, so that the error is not hidden behind them. The full
+// output is returned when nothing else is left.
+func ccErrors(out string) string {
+	var keep, included []string
+	inWarning := false
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.HasPrefix(line, "In file included from ") || strings.HasPrefix(line, "                 from ") {
+			included = append(included, line) // belongs to the next diagnostic
+			continue
+		}
+		pending := included
+		included = nil
+		if m := ccDiag.FindStringSubmatch(line); m != nil {
+			switch m[2] {
+			case "warning":
+				inWarning = true
+				continue
+			case "note":
+				if inWarning {
+					continue
+				}
+			default:
+				inWarning = false
+			}
+			keep = append(keep, pending...)
+		} else if strings.HasSuffix(line, " generated.") && strings.Contains(line, "warning") {
+			continue
+		} else if inWarning && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
+			continue // source snippet of a warning
+		} else {
+			inWarning = false
+		}
+		keep = append(keep, line)
+	}
+	if len(keep) == 0 {
+		return out
+	}
+	return strings.Join(keep, "\n") + "\n"
 }

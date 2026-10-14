@@ -622,7 +622,7 @@ func (g *gen) typeinfoDefs(b *strings.Builder) {
 		t := g.typeinfos[id]
 		ct := g.cType(t)
 		fmt.Fprintf(b, "static void gocpy_tifmt_%s(gocpy_sb *sb, const void *p) { %s; }\n",
-			id, g.dynFmt(t, "(*(const "+ct+" *)p)", "sb"))
+			id, g.dynFmt(t, "(*("+ct+" const *)p)", "sb"))
 		eq := "NULL"
 		if types.Keyable(t) || isIface(t) {
 			eq = g.eqFn(t)

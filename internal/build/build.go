@@ -11,9 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"

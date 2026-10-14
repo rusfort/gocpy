@@ -271,7 +271,7 @@ func main() { var wg sync.WaitGroup; f(&wg, time.Millisecond) }`,
 	if err := checkSrc(t, src(`func main() { var d time.Duration = 5; var x int = d; _ = x }`)); err == nil {
 		t.Error("Duration must not be assignable to int")
 	}
-	if err := checkSrc(t, "package main\nimport \"std/nope\"\nfunc main() {}"); err == nil || !strings.Contains(err.Error(), "available: std/errors, std/fmt, std/http, std/io, std/strconv, std/strings, std/sync, std/time, std/udp") {
+	if err := checkSrc(t, "package main\nimport \"std/nope\"\nfunc main() {}"); err == nil || !strings.Contains(err.Error(), "available: std/errors, std/fmt, std/gobridge, std/http, std/io, std/strconv, std/strings, std/sync, std/time, std/udp") {
 		t.Errorf("unknown package: %v", err)
 	}
 }

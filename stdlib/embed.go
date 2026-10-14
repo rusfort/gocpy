@@ -67,15 +67,24 @@ func Packages() []string {
 func Files() fs.FS { return files }
 
 var (
-	dirOnce sync.Once
+	dirMu   sync.Mutex
 	dirPath string
-	dirErr  error
 )
 
-// Dir writes the packages to the cache once and returns the root directory;
-// package std/x lives in Dir()/x.
+// Dir writes the packages to the cache and returns the root directory;
+// package std/x lives in Dir()/x. The directory is written again when it
+// was removed or GOCPY_CACHE changed.
 func Dir() (string, error) {
-	dirOnce.Do(func() {
+	dirMu.Lock()
+	defer dirMu.Unlock()
+	if dirPath != "" {
+		if _, err := os.Stat(filepath.Join(dirPath, ".complete")); err == nil {
+			return dirPath, nil
+		}
+		dirPath = ""
+	}
+	var dirErr error
+	func() {
 		once.Do(scan)
 		base := os.Getenv("GOCPY_CACHE")
 		if base == "" {
@@ -130,6 +139,6 @@ func Dir() (string, error) {
 			}
 		}
 		dirPath = root
-	})
+	}()
 	return dirPath, dirErr
 }

@@ -1,0 +1,656 @@
+// Package gobridge is the Gocpy side of the Go bridge. Stubs generated for
+// Go packages use it to pass values to Go and back; programs normally use it
+// only for Value (a Go value without a Gocpy type) and Error.
+//
+// Every value is encoded into one byte buffer (little-endian):
+//
+//	bool               1 byte
+//	int, uint          8 bytes
+//	float              8 bytes (float64 bits)
+//	string, []byte     length (8 bytes) + data
+//	slice, map         length + elements (map: key, value pairs; in any,
+//	                   a nil slice has length 2^64-1)
+//	array              elements
+//	Go value           handle (8 bytes, 0 = nil) + Go type name (string)
+//	error              0 nil | 1 handle + type name + message | 2 message |
+//	                   3 variable id + handle + type name + message
+//	any                type descriptor + value (descriptor "n": nil)
+//
+// Type descriptors: b bool, i<kind> signed, u<kind> unsigned (kind = Go
+// reflect.Kind), f<size> float, s string, y []byte, l<D> slice, a<len><D>
+// array, m<K><V> map, r<n>(name D)* struct, p<D> pointer, e any, h Go value.
+package gobridge
+
+import (
+	"std/fmt"
+	"std/strings"
+)
+
+// Ref owns a handle of a Go value. When the Ref is collected, the Go value
+// is released.
+type Ref struct {
+	h uint64
+}
+
+@extern("gocpy_gobr_track")
+func track(r *Ref)
+
+@extern("gocpy_gobr_keep")
+func keep(v any)
+
+@extern("gocpy_gobr_invoke")
+func invoke(id int, input []byte, out *[]byte) int
+
+@extern("gocpy_gobr_fatal")
+func fatal(msg string)
+
+@extern("gocpy_gobr_encode_any")
+func encodeAny(buf []byte, v any) []byte
+
+// NewRef takes ownership of a handle (0: nil).
+func NewRef(h uint64) *Ref {
+	if h == 0 {
+		return nil
+	}
+	r := &Ref{h: h}
+	track(r)
+	return r
+}
+
+// H returns the handle (0 for a nil Ref).
+func (r *Ref) H() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.h
+}
+
+// Handle is implemented by every Gocpy type that wraps a Go value.
+type Handle interface {
+	GocpyHandle() uint64
+}
+
+// HandleOf returns the handle of a wrapped Go value (0 for nil). Gocpy
+// values cannot be passed where a Go interface is expected.
+func HandleOf(v any) uint64 {
+	if v == nil {
+		return 0
+	}
+	if h, ok := v.(Handle); ok {
+		return h.GocpyHandle()
+	}
+	fatal(fmt.Sprintf("a Gocpy value of type %T cannot be used as a Go interface value (only values that come from Go can)", v))
+	return 0
+}
+
+// KeepAlive keeps v reachable until this call (handles must stay valid
+// while Go uses them).
+func KeepAlive(v any) {
+	keep(v)
+}
+
+// ---------------------------------------------------------------- registry
+
+var ctors map[string]func(r *Ref) any = nil
+
+// Register makes values of the Go type name (as in "*net/http.Request")
+// arrive in Gocpy as the type made by ctor.
+func Register(name string, ctor func(r *Ref) any) bool {
+	if ctors == nil {
+		ctors = map[string]func(r *Ref) any{}
+	}
+	ctors[name] = ctor
+	return true
+}
+
+// Make returns the registered Gocpy value of the Go type name for r, or nil.
+func Make(r *Ref, name string) any {
+	if r == nil || ctors == nil {
+		return nil
+	}
+	c, ok := ctors[name]
+	if !ok {
+		return nil
+	}
+	return c(r)
+}
+
+// Wrap returns the Gocpy value for a handle of the Go type name: the
+// registered type, or a Value.
+func Wrap(h uint64, name string) any {
+	if h == 0 {
+		return nil
+	}
+	r := NewRef(h)
+	v := Make(r, name)
+	if v != nil {
+		return v
+	}
+	return Value{gocpyRef: r, typ: name}
+}
+
+// Value is a Go value whose type has no Gocpy counterpart. It can be passed
+// back to Go functions.
+type Value struct {
+	gocpyRef *Ref
+	typ      string
+}
+
+// GocpyHandle returns the handle of the Go value.
+func (v Value) GocpyHandle() uint64 {
+	return v.gocpyRef.H()
+}
+
+// GoType returns the Go type of the value, as in "*bytes.Buffer".
+func (v Value) GoType() string {
+	return v.typ
+}
+
+// String formats the value with Go's fmt.Sprint.
+func (v Value) String() string {
+	return Sprint(v.GocpyHandle())
+}
+
+// Sprint formats the Go value of a handle with Go's fmt.Sprint.
+func Sprint(h uint64) string {
+	e := NewEncoder()
+	e.Uint(h)
+	d := Invoke(-1, e)
+	return d.String()
+}
+
+// Error is an error that comes from Go. errors.Is compares Go errors with
+// Go's errors.Is.
+type Error struct {
+	gocpyRef *Ref
+	typ      string
+	msg      string
+}
+
+func (e Error) Error() string {
+	return e.msg
+}
+
+// GocpyHandle returns the handle of the Go error.
+func (e Error) GocpyHandle() uint64 {
+	return e.gocpyRef.H()
+}
+
+// GoType returns the Go type of the error, as in "*fs.PathError".
+func (e Error) GoType() string {
+	return e.typ
+}
+
+// Is reports whether Go's errors.Is(e, target) holds for a Go target.
+func (e Error) Is(target error) bool {
+	t, ok := target.(Handle)
+	if !ok {
+		return false
+	}
+	enc := NewEncoder()
+	enc.Uint(e.GocpyHandle())
+	enc.Uint(t.GocpyHandle())
+	d := Invoke(-2, enc)
+	r := d.Bool()
+	KeepAlive(e)
+	KeepAlive(target)
+	return r
+}
+
+// Unwrap returns the error wrapped by the Go error (Go's errors.Unwrap).
+func (e Error) Unwrap() error {
+	enc := NewEncoder()
+	enc.Uint(e.GocpyHandle())
+	d := Invoke(-3, enc)
+	r := d.Err()
+	KeepAlive(e)
+	return r
+}
+
+// ---------------------------------------------------------------- encoding
+
+// Encoder builds the argument buffer of a Go call.
+type Encoder struct {
+	buf []byte
+}
+
+// NewEncoder returns an empty Encoder.
+func NewEncoder() *Encoder {
+	return &Encoder{buf: make([]byte, 0, 64)}
+}
+
+func (e *Encoder) u64(v uint64) {
+	e.buf = append(e.buf, byte(v), byte(v>>8), byte(v>>16), byte(v>>24), byte(v>>32), byte(v>>40), byte(v>>48), byte(v>>56))
+}
+
+// Bool encodes a bool.
+func (e *Encoder) Bool(b bool) {
+	if b {
+		e.buf = append(e.buf, 1)
+	} else {
+		e.buf = append(e.buf, 0)
+	}
+}
+
+// Int encodes a signed integer.
+func (e *Encoder) Int(v int64) {
+	e.u64(uint64(v))
+}
+
+// Uint encodes an unsigned integer.
+func (e *Encoder) Uint(v uint64) {
+	e.u64(v)
+}
+
+// Float encodes a float.
+func (e *Encoder) Float(f float64) {
+	var u uint64 = 0
+	unsafe {
+		u = *(*uint64)(&f)
+	}
+	e.u64(u)
+}
+
+// Len encodes a length.
+func (e *Encoder) Len(n int) {
+	e.u64(uint64(n))
+}
+
+// String encodes a string.
+func (e *Encoder) String(s string) {
+	e.u64(uint64(len(s)))
+	e.buf = append(e.buf, []byte(s)...)
+}
+
+// Bytes encodes a byte slice.
+func (e *Encoder) Bytes(b []byte) {
+	e.u64(uint64(len(b)))
+	e.buf = append(e.buf, b...)
+}
+
+// Handle encodes a Go value by its handle.
+func (e *Encoder) Handle(h uint64) {
+	e.u64(h)
+	e.String("")
+}
+
+// Err encodes an error: a Go error by handle, a Gocpy error by message.
+func (e *Encoder) Err(err error) {
+	if err == nil {
+		e.buf = append(e.buf, 0)
+		return
+	}
+	if h, ok := err.(Handle); ok {
+		e.buf = append(e.buf, 1)
+		e.u64(h.GocpyHandle())
+		e.String("")
+		e.String("")
+		return
+	}
+	e.buf = append(e.buf, 2)
+	e.String(err.Error())
+}
+
+// Any encodes a value of any type (Gocpy values are copied; Go values are
+// passed by handle).
+func (e *Encoder) Any(v any) {
+	e.buf = encodeAny(e.buf, v)
+}
+
+// Invoke calls the Go function id with the encoded arguments and returns a
+// Decoder of its results. A Go panic stops the program (exit code 2).
+func Invoke(id int, e *Encoder) *Decoder {
+	var out []byte
+	invoke(id, e.buf, &out)
+	return &Decoder{buf: out}
+}
+
+// ---------------------------------------------------------------- decoding
+
+// Decoder reads the results of a Go call.
+type Decoder struct {
+	buf []byte
+	pos int
+}
+
+func (d *Decoder) need(n int) {
+	if d.pos+n > len(d.buf) {
+		fatal("go bridge: truncated data from Go")
+	}
+}
+
+func (d *Decoder) u64() uint64 {
+	d.need(8)
+	b := d.buf[d.pos : d.pos+8]
+	d.pos += 8
+	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+}
+
+func (d *Decoder) byte1() byte {
+	d.need(1)
+	c := d.buf[d.pos]
+	d.pos++
+	return c
+}
+
+// Bool decodes a bool.
+func (d *Decoder) Bool() bool {
+	return d.byte1() != 0
+}
+
+// Int decodes a signed integer.
+func (d *Decoder) Int() int64 {
+	return int64(d.u64())
+}
+
+// Uint decodes an unsigned integer.
+func (d *Decoder) Uint() uint64 {
+	return d.u64()
+}
+
+// Float decodes a float.
+func (d *Decoder) Float() float64 {
+	u := d.u64()
+	var f float64 = 0
+	unsafe {
+		f = *(*float64)(&u)
+	}
+	return f
+}
+
+// Len decodes a length.
+func (d *Decoder) Len() int {
+	return int(d.u64())
+}
+
+// String decodes a string.
+func (d *Decoder) String() string {
+	n := d.Len()
+	d.need(n)
+	s := string(d.buf[d.pos : d.pos+n])
+	d.pos += n
+	return s
+}
+
+// Bytes decodes a byte slice.
+func (d *Decoder) Bytes() []byte {
+	n := d.Len()
+	if n == 0 {
+		return nil
+	}
+	d.need(n)
+	b := make([]byte, n)
+	for i := 0; i < n; i++ {
+		b[i] = d.buf[d.pos+i]
+	}
+	d.pos += n
+	return b
+}
+
+// Handle decodes a Go value handle and its Go type name.
+func (d *Decoder) Handle() (uint64, string) {
+	h := d.u64()
+	name := d.String()
+	return h, name
+}
+
+// Err decodes an error.
+func (d *Decoder) Err() error {
+	form := d.byte1()
+	if form == 0 {
+		return nil
+	}
+	if form == 2 {
+		return Error{msg: d.String()}
+	}
+	sid := -1
+	if form == 3 {
+		sid = d.Len()
+	}
+	h, name := d.Handle()
+	msg := d.String()
+	r := NewRef(h)
+	if sid >= 0 && sentinels != nil {
+		s, ok := sentinels[sid]
+		if ok {
+			return s
+		}
+	}
+	if err, isErr := Make(r, name).(error); isErr {
+		return err
+	}
+	return Error{gocpyRef: r, typ: name, msg: msg}
+}
+
+var sentinels map[int]error = nil
+
+// Sentinel records the value of a Go package variable of type error (as
+// io.EOF): Go returns it again as the same Gocpy value, so == works.
+func Sentinel(id int, err error) bool {
+	if sentinels == nil {
+		sentinels = map[int]error{}
+	}
+	sentinels[id] = err
+	return true
+}
+
+type desc struct {
+	tag    byte
+	kind   byte
+	n      int
+	elem   *desc
+	key    *desc
+	fields []*desc
+	names  []string
+}
+
+func (d *Decoder) desc() *desc {
+	t := &desc{tag: d.byte1()}
+	switch t.tag {
+	case 'i', 'u', 'f':
+		t.kind = d.byte1()
+	case 'l', 'p':
+		t.elem = d.desc()
+	case 'a':
+		t.n = d.Len()
+		t.elem = d.desc()
+	case 'm':
+		t.key = d.desc()
+		t.elem = d.desc()
+	case 'r':
+		n := d.Len()
+		for i := 0; i < n; i++ {
+			t.names = append(t.names, d.String())
+			t.fields = append(t.fields, d.desc())
+		}
+	}
+	return t
+}
+
+// Any decodes a value of any type: Go values with a registered Gocpy type
+// become that type; slices, maps and basic values are copied; other Go
+// values become Value.
+func (d *Decoder) Any() any {
+	return d.value(d.desc())
+}
+
+func (d *Decoder) value(t *desc) any {
+	switch t.tag {
+	case 'n':
+		return nil
+	case 'b':
+		return d.Bool()
+	case 'i':
+		v := d.Int()
+		switch t.kind {
+		case 3:
+			return int8(v)
+		case 4:
+			return int16(v)
+		case 5:
+			return int32(v)
+		case 6:
+			return v
+		}
+		return int(v)
+	case 'u':
+		v := d.Uint()
+		switch t.kind {
+		case 8:
+			return uint8(v)
+		case 9:
+			return uint16(v)
+		case 10:
+			return uint32(v)
+		case 11:
+			return v
+		case 12:
+			return uintptr(v)
+		}
+		return uint(v)
+	case 'f':
+		f := d.Float()
+		if t.kind == 4 {
+			return float32(f)
+		}
+		return f
+	case 's':
+		return d.String()
+	case 'y':
+		return d.Bytes()
+	case 'e':
+		return d.Any()
+	case 'h':
+		h, name := d.Handle()
+		return Wrap(h, name)
+	case 'x':
+		return d.Err()
+	case 'p':
+		if !d.Bool() {
+			return nil
+		}
+		return d.value(t.elem)
+	case 'l':
+		return d.list(t.elem, d.Len())
+	case 'a':
+		return d.list(t.elem, t.n)
+	case 'm':
+		return d.mapValue(t)
+	case 'r':
+		m := map[string]any{}
+		for i, f in t.fields {
+			m[t.names[i]] = d.value(f)
+		}
+		return m
+	}
+	fatal(fmt.Sprintf("go bridge: unknown type descriptor %q", string([]byte{t.tag})))
+	return nil
+}
+
+func isKind(t *desc, tag byte, kind byte) bool {
+	return t.tag == tag && (kind == 0 || t.kind == kind)
+}
+
+func (d *Decoder) list(et *desc, n int) any {
+	switch {
+	case isKind(et, 's', 0):
+		out := make([]string, n)
+		for i := 0; i < n; i++ {
+			out[i] = d.String()
+		}
+		return out
+	case isKind(et, 'i', 2):
+		out := make([]int, n)
+		for i := 0; i < n; i++ {
+			out[i] = int(d.Int())
+		}
+		return out
+	case isKind(et, 'i', 6):
+		out := make([]int64, n)
+		for i := 0; i < n; i++ {
+			out[i] = d.Int()
+		}
+		return out
+	case isKind(et, 'f', 8):
+		out := make([]float64, n)
+		for i := 0; i < n; i++ {
+			out[i] = d.Float()
+		}
+		return out
+	case isKind(et, 'b', 0):
+		out := make([]bool, n)
+		for i := 0; i < n; i++ {
+			out[i] = d.Bool()
+		}
+		return out
+	case isKind(et, 'y', 0):
+		out := make([][]byte, n)
+		for i := 0; i < n; i++ {
+			out[i] = d.Bytes()
+		}
+		return out
+	}
+	out := make([]any, n)
+	for i := 0; i < n; i++ {
+		out[i] = d.value(et)
+	}
+	return out
+}
+
+func (d *Decoder) mapValue(t *desc) any {
+	n := d.Len()
+	if isKind(t.key, 's', 0) {
+		switch {
+		case isKind(t.elem, 's', 0):
+			m := map[string]string{}
+			for i := 0; i < n; i++ {
+				k := d.String()
+				m[k] = d.String()
+			}
+			return m
+		case isKind(t.elem, 'i', 2):
+			m := map[string]int{}
+			for i := 0; i < n; i++ {
+				k := d.String()
+				m[k] = int(d.Int())
+			}
+			return m
+		case isKind(t.elem, 'f', 8):
+			m := map[string]float64{}
+			for i := 0; i < n; i++ {
+				k := d.String()
+				m[k] = d.Float()
+			}
+			return m
+		case isKind(t.elem, 'b', 0):
+			m := map[string]bool{}
+			for i := 0; i < n; i++ {
+				k := d.String()
+				m[k] = d.Bool()
+			}
+			return m
+		}
+		m := map[string]any{}
+		for i := 0; i < n; i++ {
+			k := d.String()
+			m[k] = d.value(t.elem)
+		}
+		return m
+	}
+	if isKind(t.key, 'i', 0) {
+		m := map[int]any{}
+		for i := 0; i < n; i++ {
+			k := int(d.Int())
+			m[k] = d.value(t.elem)
+		}
+		return m
+	}
+	// other keys: formatted as strings
+	m := map[string]any{}
+	for i := 0; i < n; i++ {
+		k := fmt.Sprint(d.value(t.key))
+		m[strings.TrimSpace(k)] = d.value(t.elem)
+	}
+	return m
+}

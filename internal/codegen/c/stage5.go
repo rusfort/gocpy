@@ -638,8 +638,24 @@ func (g *gen) typeinfoDefs(b *strings.Builder) {
 			mt = "gocpy_tim_" + id
 		}
 		kind, elem, idesc := g.tiKind(t)
-		fmt.Fprintf(b, "const gocpy_typeinfo gocpy_ti_%s = { %s, gocpy_tifmt_%s, sizeof(%s), %v, %s, %d, %s, %s, %s, %s };\n\n",
-			id, cString(g.typeName(t)), id, ct, ptrShaped(t), eq, len(ms), mt, kind, elem, idesc)
+		nf, fields, key, alen := "0", "NULL", "NULL", "0"
+		switch u := t.Underlying().(type) {
+		case *types.Struct:
+			if len(u.Fields) > 0 {
+				var fs []string
+				for _, f := range u.Fields {
+					fs = append(fs, fmt.Sprintf("{ %s, offsetof(%s, %s), %s }", cString(f.Name), ct, cIdent(f.Name), g.tiRefT(f.Type)))
+				}
+				fmt.Fprintf(b, "static const gocpy_field gocpy_tif_%s[] = { %s };\n", id, strings.Join(fs, ", "))
+				nf, fields = fmt.Sprint(len(u.Fields)), "gocpy_tif_"+id
+			}
+		case *types.Map:
+			key, elem = g.tiRefT(u.Key), g.tiRefT(u.Elem)
+		case *types.Array:
+			alen = fmt.Sprint(u.Len)
+		}
+		fmt.Fprintf(b, "const gocpy_typeinfo gocpy_ti_%s = { %s, gocpy_tifmt_%s, sizeof(%s), %v, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s };\n\n",
+			id, cString(g.typeName(t)), id, ct, ptrShaped(t), eq, len(ms), mt, kind, elem, idesc, nf, fields, key, alen)
 	}
 }
 

@@ -459,6 +459,9 @@ func (c *checker) builtin(e *ast.CallExpr, b *Builtin) *operand {
 		}
 		t := c.typeArg(e.Args[0])
 		ci.TypeArg = t
+		if n, ctor := c.goWrapper(t); n != nil && ctor != "" && !c.rewritten {
+			c.rw().news[e] = n
+		}
 		return &operand{mode: Value, typ: &Pointer{Elem: t}}
 
 	case BSizeof:

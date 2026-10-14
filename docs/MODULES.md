@@ -126,40 +126,85 @@ this:
 1. A helper Go module is created for the imported Go packages, with the
    `require` and `replace` entries from `gocpy.yml`.
 2. The API of these packages is read with the user's Go toolchain.
-3. For every supported function, a cgo export, a C adapter and a Gocpy stub
-   are generated.
+3. A table of the Go functions, methods, field accessors and variables is
+   generated, together with a Gocpy stub package per Go package.
 4. Everything is built with `go build -buildmode=c-archive` and linked into
    the program.
 5. The result is cached in `$GOCPY_CACHE/gobridge`, by default
    `~/.cache/gocpy/gobridge`.
 
-Supported:
+Packages of the Go standard library (`net/http`, `encoding/json`, ...) need
+no `require` entry: they are imported by their Go path. A Gocpy `std/`
+package with the same name needs an alias (`gofmt "fmt"`).
 
-- package functions whose parameters and results are `bool`, `int*`,
-  `uint*`, `uintptr`, `float32`, `float64`, `string` or `[]byte`, including
-  named types with these underlying types such as `time.Duration`;
-- an optional trailing `error` result, which becomes a Gocpy `error` value;
-- constants of these types.
+Supported Go API:
+
+- functions, including variadic ones, methods, constants and package
+  variables (read once at startup);
+- `bool`, integer and float types, `string` and `[]byte`, copied;
+- named basic types such as `time.Duration`: aliases of the Gocpy basic type,
+  so `time.Duration(n)` and `var d time.Duration` work (their methods are not
+  available);
+- `any`: Gocpy values are copied into Go values (structs become Go structs
+  with the exported fields, slices, maps and pointers become Go slices, maps
+  and pointers; a field that refers back to its struct type becomes `any`).
+  Go values come back as Gocpy values: basic values, `[]T` and `map[K]V` for
+  common element types, otherwise `[]any` and `map[string]any`, and Gocpy
+  types for Go types;
+- unnamed slices, arrays and maps with basic keys, copied;
+- `error`: Go errors become Gocpy errors. `errors.Is` uses Go's `errors.Is`,
+  and errors from package variables (`io.EOF`, `os.ErrNotExist`) can be
+  compared with `==`;
+- other named types: a Gocpy type with the same name, the exported methods
+  and the exported fields (also promoted ones). The Gocpy value refers to the
+  Go value; copies of it refer to the same Go value. Struct values are kept
+  as pointers to a copy, so methods with pointer receivers work;
+- Go interfaces: Gocpy interfaces with the same methods. Any Go value that
+  implements a Go interface can be passed where the interface is expected
+  (`io.ReadAll(strings.NewReader("x"))`). Gocpy values cannot implement Go
+  interfaces;
+- types of other Go packages used by the imported ones (`*url.URL` in
+  `http.Request.URL`) are available with their methods and fields.
+
+Fields of Go values:
+
+```gocpy
+u := &url.URL{Scheme: "https", Host: "example.com"}   // a new Go value
+u.Path = "/a"                                          // field assignment
+u.Path += "/b"
+c := http.Cookie{Name: "n", Value: "v"}
+c.MaxAge++
+b := new(strings.Builder)
+```
+
+A field can be read, assigned alone (`=`, `op=`, `++`, `--`) or set in a
+composite literal; `&x.F` and assignments with several left-hand sides are
+errors. Fields of struct types alias the Go value: `req.URL.Path = "/x"`
+changes the request. Fields of slice and map types are copies.
 
 How calls work:
 
-- Strings and byte slices are copied in both directions, so Go never keeps
-  pointers into Gocpy memory.
+- Arguments and results are encoded into one byte buffer (the format is
+  documented in `std/gobridge`). Go values are passed by handle; a handle is
+  released when the Gocpy values that refer to it are collected (with
+  `gc: boehm`).
 - Go calls run on a separate thread pool unknown to the Boehm GC, while the
   calling goroutine waits in `GC_do_blocking`. A call costs a few
   microseconds.
 - A panic in Go stops the program with exit code 2:
   `runtime error: panic in Go code: ...`.
 
-Not supported yet:
+Not supported:
 
-- Go types, methods and package variables;
-- variadic and generic functions;
-- slices other than `[]byte`;
-- maps, channels, function values and callbacks from Go into Gocpy.
+- callbacks: Go functions with func or channel parameters or results;
+- generic Go functions and types, unnamed struct types, pointers to basic
+  types, `complex` and `unsafe.Pointer`;
+- Gocpy values that implement Go interfaces;
+- changes made by Go to a copied Gocpy value: out-parameters such as
+  `json.Unmarshal(data, &v)` do not change `v`.
 
 When code uses such a name, the compiler explains why, for example:
-`gr.Join: parameter 1 has type []string, which the Go bridge does not support yet`.
+`strings.Map: parameter 1: func values (callbacks) are not supported`.
 
 ## Go files next to Gocpy code
 

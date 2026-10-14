@@ -449,38 +449,69 @@ Native code of dependencies is built together with the program.
 
 ### Using Go modules
 
-Go packages from `require.go` are imported like any other package:
+Packages of the Go standard library and Go packages from `require.go` are
+imported like any other package. A Go standard library package is imported by
+its Go path; when a Gocpy `std/` package has the same name, one of them needs
+an alias:
 
 ```gocpy
 import (
     "std/fmt"
+    gofmt "fmt"
+    "net/http"
+    "io"
     "github.com/google/uuid"
 )
 
 func main() {
-    fmt.Println(uuid.NewString())
+    fmt.Println(uuid.NewString(), gofmt.Sprint("any", 1, []int{2, 3}))
+    resp, err := http.Get("https://example.com")
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    body, _ := io.ReadAll(resp.Body)
+    resp.Body.Close()
+    fmt.Println(resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
 }
 ```
 
 The bridge creates a small Go module with your `require` and `replace`
-entries, reads the API of the imported packages, and generates cgo exports, C
-adapters and Gocpy stubs. It then builds everything with
-`go build -buildmode=c-archive`, links the archive into the program, and
+entries, reads the API of the imported packages and generates a table of Go
+calls plus Gocpy stubs. It builds everything with
+`go build -buildmode=c-archive`, links the archive into the program and
 caches the result.
 
-Supported Go API:
+Go values and types in Gocpy:
 
-- package functions whose parameters and results are `bool`, integers,
-  floats, `string` or `[]byte`, including named types with these underlying
-  types such as `time.Duration`;
-- an optional trailing `error` result, which becomes a Gocpy `error` value;
-- constants of these types.
+| Go | Gocpy |
+|---|---|
+| `bool`, integers, floats, `string`, `[]byte` | the same types, copied |
+| named basic types (`time.Duration`, `http.Dir`) | aliases of the basic type (`type Duration = int64`) |
+| `any` / `interface{}` | `any`: Gocpy values (structs, slices, maps, pointers) are copied into Go values; Go values come back as Gocpy values |
+| unnamed slices, arrays, maps (basic keys) | the same Gocpy types, copied |
+| `error` | `error`; `errors.Is` and `==` work with Go errors such as `io.EOF` |
+| other named types (`*http.Response`, `url.URL`, `bytes.Buffer`) | Gocpy types with the same names, methods and fields; they refer to the Go value |
+| interfaces (`io.Reader`) | Gocpy interfaces implemented by Go values |
 
-Strings and byte slices are copied across the boundary. Go calls run on a
-thread pool unknown to the GC while the calling goroutine waits. A Go panic
-stops the program with exit code 2. Using an unsupported name produces an
-explanation, for example `gr.Join: parameter 1 has type []string, which the Go
-bridge does not support yet`.
+Fields of Go values are read and written like fields: `resp.StatusCode`,
+`u.Path = "/a"`, `c.MaxAge++`. Composite literals (`&url.URL{Host: "x"}`)
+and `new(T)` create Go values. Variadic functions work; package variables are
+read once at startup.
+
+Limits: Go functions with func or channel parameters (callbacks), generic Go
+functions and types, unnamed struct types and pointers to basic types are not
+available. Gocpy values cannot implement Go interfaces, and Go does not see
+later changes of a copied Gocpy value (out-parameters such as
+`json.Unmarshal(data, &v)` do not work; use `json.NewDecoder` or Go types).
+The address of a field of a Go value cannot be taken. Methods of named basic
+types (`time.Duration.String`) are not available.
+
+Go calls run on a thread pool unknown to the GC while the calling goroutine
+waits; a call costs a few microseconds. Go values are released when the Gocpy
+values that refer to them are collected. A Go panic stops the program with
+exit code 2. Using an unsupported name produces an explanation, for example
+`strings.Map: parameter 1: func values (callbacks) are not supported`.
 
 ### Go files next to Gocpy code
 
@@ -516,7 +547,7 @@ func main() {
 - The Go files may import the Go standard library and modules listed in
   `require.go`. An import of any other module is an error, so versions stay
   pinned in `gocpy.yml` and `gocpy.sum`.
-- The same API subset as for Go modules is supported. The bridge is rebuilt
+- The same API as for Go modules is supported. The bridge is rebuilt
   when the Go files change. In the editor, go-to-definition and hover lead
   straight into the `.go` files.
 
@@ -620,9 +651,9 @@ highlighting and navigation in the rest of the file.
 - A generic body is checked only when instantiated. Methods cannot have their
   own type parameters, partial explicit instantiation is not supported, and
   there are no method expressions (`T.M`).
-- The Go bridge does not yet support Go types, methods, package variables,
-  variadic or generic functions, slices other than `[]byte`, maps, channels or
-  callbacks.
+- The Go bridge does not support callbacks (func and channel parameters),
+  generic Go functions and types, or Gocpy values implementing Go
+  interfaces; Gocpy values passed to Go are copies.
 - `std/http` has no HTTPS/TLS (use a Go module through the bridge). Server
   responses are buffered and sent when the handler returns (no streaming or
   `Flush`), client bodies are read into memory, and `Client.Timeout` applies

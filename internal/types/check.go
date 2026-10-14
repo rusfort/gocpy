@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/constant"
 	"path"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -191,12 +192,19 @@ type checker struct {
 	inConstraint bool     // evaluating a type parameter constraint
 	phase        int      // checking phase (methods of instances are attached from phase 4)
 	pendingInst  []*Named // instances created before phase 4
+	rewrites     *goRewrites
+	rewritten    bool // second pass after rewriting Go field accesses
 }
 
 // Check type-checks a package made of files.
 func Check(files []*ast.File) (*Package, *Info, error) {
+	return check(files, false)
+}
+
+func check(files []*ast.File, rewritten bool) (*Package, *Info, error) {
 	c := &checker{
-		pkg: &Package{Scope: NewScope(Universe, "package"), Files: files, FileOf: map[Object]*ast.File{}},
+		rewritten: rewritten,
+		pkg:       &Package{Scope: NewScope(Universe, "package"), Files: files, FileOf: map[Object]*ast.File{}},
 		info: &Info{
 			Types:        map[ast.Expr]TypeAndValue{},
 			Defs:         map[*ast.Ident]Object{},
@@ -221,6 +229,12 @@ func Check(files []*ast.File) (*Package, *Info, error) {
 		imports:    map[*ast.File]map[string]*PkgName{},
 	}
 	c.run()
+	if !rewritten && !c.rewrites.empty() {
+		for _, f := range files {
+			c.rewrites.rewrite(c, reflect.ValueOf(f))
+		}
+		return check(files, true)
+	}
 	if len(c.errs) > 0 {
 		sort.SliceStable(c.errs, func(i, j int) bool {
 			a, b := c.errs[i].Pos, c.errs[j].Pos
@@ -299,7 +313,7 @@ func (c *checker) run() {
 	}
 
 	// 2. collect package-level objects
-	var typeSpecs []*ast.TypeSpec
+	var typeSpecs, aliasSpecs []*ast.TypeSpec
 	var typeAnnots []ast.Annotations
 	type valueDecl struct {
 		spec    *ast.ValueSpec
@@ -329,7 +343,10 @@ func (c *checker) run() {
 							continue
 						}
 						if s.Alias {
-							c.errorf(s.Pos(), "type aliases are not supported yet")
+							tn := &TypeName{object{name: s.Name.Name, pos: s.Name.Pos()}}
+							c.declare(c.pkg.Scope, s.Name, tn)
+							c.pkg.FileOf[tn] = f
+							aliasSpecs = append(aliasSpecs, s)
 							continue
 						}
 						tn := &TypeName{object{name: s.Name.Name, pos: s.Name.Pos()}}
@@ -432,6 +449,16 @@ func (c *checker) run() {
 				c.pendingTypes[n] = s
 			}
 		}
+	}
+	// aliases (type A = T) denote T itself
+	for _, s := range aliasSpecs {
+		tn, ok := c.pkg.Scope.Lookup(s.Name.Name).(*TypeName)
+		if !ok || tn.typ != nil {
+			continue
+		}
+		c.curFile = c.pkg.FileOf[tn]
+		tn.typ = Typ[Invalid]
+		tn.typ = c.typExpr(s.Type)
 	}
 	for i, s := range typeSpecs {
 		tn := c.pkg.Scope.Lookup(s.Name.Name).(*TypeName)

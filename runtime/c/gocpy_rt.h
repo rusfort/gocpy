@@ -39,6 +39,7 @@ void gocpy_raw_free(void *p);
 void gocpy_raw_memcpy(void *dst, const void *src, int64_t n);
 void gocpy_raw_memset(void *p, uint8_t b, int64_t n);
 void *gocpy_alloc(size_t n);          /* zeroed, GC-managed when built with gc: boehm */
+void *gocpy_alloc_atomic_bytes(size_t n); /* zeroed memory without pointers */
 
 /* ---- strings ---- */
 gocpy_string gocpy_string_concat(gocpy_string a, gocpy_string b);
@@ -98,9 +99,19 @@ typedef struct gocpy_typeinfo {
     int nmethods;
     const gocpy_method *methods;                       /* method set (for dynamic itab lookup) */
     int kind;                                          /* GOCPY_K_* (0: other) */
-    const struct gocpy_typeinfo *elem;                 /* pointer, slice and array element */
+    const struct gocpy_typeinfo *elem;                 /* pointer, slice and array element; map value */
     const struct gocpy_idesc *iface;                   /* interface types: method descriptor */
+    int nfields;                                       /* structs: fields in declaration order */
+    const struct gocpy_field *fields;
+    const struct gocpy_typeinfo *key;                  /* maps: key type */
+    int64_t len;                                       /* arrays: length */
 } gocpy_typeinfo;
+
+typedef struct gocpy_field {
+    const char *name;
+    size_t offset;
+    const gocpy_typeinfo *type;
+} gocpy_field;
 
 /* kinds for fmt verbs, Scan and errors.As */
 enum {
@@ -210,6 +221,14 @@ static inline void *gocpy_iface_fn(gocpy_iface x, int i) {
 static inline const gocpy_typeinfo *gocpy_iface_type(gocpy_iface x) { return x.itab ? x.itab->type : NULL; }
 /* pointer to the dynamic value (for typeinfo fmt/eq) */
 #define GOCPY_IFACE_VALP(x) ((x).itab->type->is_ptr ? (const void *)&(x).data : (const void *)(x).data)
+
+/* Go bridge (std/gobridge) */
+extern int (*gocpy_gobr_hook)(int64_t id, const void *in, int64_t inn, void **out, int64_t *outn,
+                              const uint64_t *rel, int64_t nrel);
+void gocpy_gobr_keep(gocpy_iface v);
+int64_t gocpy_gobr_invoke(int64_t id, gocpy_slice in, gocpy_slice *out);
+gocpy_slice gocpy_gobr_encode_any(gocpy_slice buf, gocpy_iface v);
+void gocpy_gobr_fatal(gocpy_string msg);
 
 /* exceptions <-> interfaces */
 gocpy_exception *gocpy_exc_from_iface(gocpy_iface x);  /* throw err */

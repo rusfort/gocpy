@@ -253,6 +253,37 @@ func Load(target string, opts *Options) (*Program, error) {
 			}
 			prog.Bridge = res
 		}
+		var bridgeUnits []*unit
+		if prog.Bridge != nil {
+			// packages whose types the imported Go packages use
+			var refs []string
+			for p := range res.Packages {
+				if l.units[p] == nil {
+					refs = append(refs, p)
+				}
+			}
+			sort.Strings(refs)
+			for _, p := range refs {
+				l.units[p] = &unit{path: p, isGo: true}
+				l.state[p] = 2
+			}
+			req.Packages = append(refs, req.Packages...)
+			// std/gobridge (and the packages it imports) are initialized first
+			n := len(l.order)
+			if gb, err := l.resolve(t, "std/gobridge", token.Pos{}); err != nil {
+				return nil, err
+			} else if l.state[gb.path] == 0 {
+				l.visit(gb)
+			}
+			bridgeUnits = append(bridgeUnits, l.order[n:]...)
+			l.order = l.order[:n]
+			for _, u := range l.order {
+				if u.path == "std/gobridge" {
+					bridgeUnits = append(bridgeUnits, u)
+				}
+			}
+		}
+		goUnits = append(goUnits, bridgeUnits...)
 		for _, p := range req.Packages {
 			bp := res.Packages[p]
 			fs, err := parsePackage([]string{bp.Stub})
@@ -275,7 +306,14 @@ func Load(target string, opts *Options) (*Program, error) {
 			return nil, err
 		}
 	}
-	all := append(goUnits, l.order...)
+	var all []*unit
+	inAll := map[*unit]bool{}
+	for _, u := range append(goUnits, l.order...) {
+		if !inAll[u] {
+			inAll[u] = true
+			all = append(all, u)
+		}
+	}
 
 	// names
 	byName := map[string]int{}
@@ -441,6 +479,13 @@ func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 	case p == from.modPath || strings.HasPrefix(p, from.modPath+"/"):
 		modPath, modRoot = from.modPath, from.modRoot
 		dir = filepath.Join(from.modRoot, filepath.FromSlash(strings.TrimPrefix(strings.TrimPrefix(p, from.modPath), "/")))
+	case IsGoStdPath(p):
+		// a package of the Go standard library
+		u := &unit{path: p, isGo: true}
+		l.units[p] = u
+		l.state[p] = 2
+		l.goPkgs[p] = append(l.goPkgs[p], pos)
+		return u, nil
 	default:
 		if err := l.needGraph(); err != nil {
 			return nil, err
@@ -480,6 +525,14 @@ func (l *loader) resolve(from *unit, p string, pos token.Pos) (*unit, error) {
 	u := &unit{path: p, dir: dir, name: files[0].Name.Name, files: files, modPath: modPath, modRoot: modRoot}
 	l.units[p] = u
 	return u, nil
+}
+
+// IsGoStdPath reports whether p looks like a package of the Go standard
+// library (the first path element has no dot: "strings", "net/http").
+func IsGoStdPath(p string) bool {
+	first, _, _ := strings.Cut(p, "/")
+	return first != "" && first != "std" && !strings.Contains(first, ".") && first != "gocpybridge" &&
+		!strings.HasPrefix(p, "./") && !strings.HasPrefix(p, "../") && !path.IsAbs(p)
 }
 
 // topNames collects package-level declarations and struct types.

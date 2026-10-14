@@ -988,6 +988,9 @@ func (c *checker) selector(e *ast.SelectorExpr) *operand {
 			return &operand{mode: mode, typ: f.Type}
 		}
 	}
+	if p := c.property(e, t); p != nil {
+		return p
+	}
 	if _, ok := t.Underlying().(*Slice); ok && !indirect && name == "append" {
 		sel := &Selection{Kind: SliceMethodSel}
 		c.info.Selections[e] = sel
@@ -1188,6 +1191,14 @@ func (c *checker) compositeLit(e *ast.CompositeLit, hint Type) *operand {
 	}
 	if typ == Typ[Invalid] {
 		return c.invalid(e)
+	}
+	if n, ctor := c.goWrapper(typ); n != nil && ctor != "" && !gocpyRefLit(e) {
+		if c.rewritten {
+			c.errorf(e.Pos(), "a composite literal of the Go type %s needs field names (%s{Field: value})", typ, typ)
+			return c.invalid(e)
+		}
+		c.rw().lits[e] = n
+		return &operand{mode: Value, typ: typ}
 	}
 	switch u := typ.Underlying().(type) {
 	case *Struct:
@@ -1492,4 +1503,16 @@ func (sp Spec) Check(t Type) string {
 		return "precision is only allowed for floats"
 	}
 	return ""
+}
+
+// gocpyRefLit: T{GocpyRef: r} (generated code)
+func gocpyRefLit(e *ast.CompositeLit) bool {
+	for _, el := range e.Elts {
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "GocpyRef" {
+				return true
+			}
+		}
+	}
+	return false
 }

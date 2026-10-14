@@ -227,7 +227,7 @@ func (s *server) scopeItems(pa *pkgAnalysis, path string, line, col int) []Compl
 			if i := strings.Index(n, "__"); i > 0 && deps[n[:i+2]] {
 				continue
 			}
-			if strings.HasPrefix(n, "gocpy_") || strings.HasPrefix(n, "_") {
+			if strings.HasPrefix(n, "gocpy_") || strings.HasPrefix(n, "_") || hiddenName(n) {
 				continue
 			}
 			o := pa.a.Pkg.Scope.Lookup(n)
@@ -542,6 +542,11 @@ func memberType(t types.Type, name string) types.Type {
 		if ms := n.Methods[name]; len(ms) > 0 {
 			return ms[0].Type()
 		}
+		if ms := n.Methods["GocpyGet_"+name]; len(ms) > 0 {
+			if sig, ok := ms[0].Type().(*types.Signature); ok && len(sig.Results) == 1 {
+				return sig.Results[0].Type()
+			}
+		}
 	}
 	if base == nil || base.Underlying() == nil {
 		return nil
@@ -587,6 +592,16 @@ func (s *server) typeMembers(pa *pkgAnalysis, t types.Type) []CompletionItem {
 				continue
 			}
 			fs := n.Methods[m]
+			if f := strings.TrimPrefix(m, "GocpyGet_"); f != m {
+				// a field of a Go value (read with x.F, set with x.F = v)
+				if sig, ok := fs[0].Type().(*types.Signature); ok && len(sig.Results) == 1 {
+					items = append(items, CompletionItem{Label: f, Kind: ckField, Detail: s.typeStr(pa, sig.Results[0].Type()), SortText: "0" + f})
+				}
+				continue
+			}
+			if hiddenName(m) {
+				continue
+			}
 			detail := s.typeStr(pa, fs[0].Type())
 			if len(fs) > 1 {
 				detail += " (+" + itoa(len(fs)-1) + ")"
@@ -601,7 +616,7 @@ func (s *server) typeMembers(pa *pkgAnalysis, t types.Type) []CompletionItem {
 	switch u := base.Underlying().(type) {
 	case *types.Struct:
 		for _, f := range u.Fields {
-			if foreign && !build.Exported(f.Name) {
+			if (foreign && !build.Exported(f.Name)) || hiddenName(f.Name) {
 				continue
 			}
 			items = append(items, CompletionItem{Label: f.Name, Kind: ckField, Detail: s.typeStr(pa, f.Type), SortText: "0" + f.Name})
@@ -658,7 +673,7 @@ func (s *server) packageMembers(pa *pkgAnalysis, ip string) []CompletionItem {
 			continue
 		}
 		name := strings.TrimPrefix(n, pk.Prefix)
-		if !build.Exported(name) || strings.Contains(name, "__") {
+		if !build.Exported(name) || strings.Contains(name, "__") || hiddenName(name) {
 			continue
 		}
 		if it, ok := s.objItem(pa, name, pa.a.Pkg.Scope.Lookup(n)); ok {
@@ -875,4 +890,13 @@ func utf16Len(s string) int {
 	}
 	_ = utf8.RuneLen
 	return n
+}
+
+// hiddenName: helpers generated for Go packages (GocpyHandle, GocpyRef,
+// GocpyGet_F, gocpyEnc_1, ...) are not offered in completion.
+func hiddenName(n string) bool {
+	if i := strings.LastIndex(n, "__"); i >= 0 {
+		n = n[i+2:]
+	}
+	return strings.HasPrefix(n, "Gocpy") || strings.HasPrefix(n, "gocpy")
 }

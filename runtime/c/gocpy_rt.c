@@ -83,6 +83,8 @@ static void *gocpy_alloc_atomic(size_t n) { /* memory without pointers */
     return p;
 }
 
+void *gocpy_alloc_atomic_bytes(size_t n) { return gocpy_alloc_atomic(n); }
+
 /* ---------------------------------------------------------------- manual memory */
 
 uint8_t *gocpy_raw_malloc(int64_t n, bool zero) {

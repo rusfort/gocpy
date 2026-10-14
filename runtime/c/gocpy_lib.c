@@ -1674,3 +1674,299 @@ int64_t gocpy_unix_nano(void) {
     clock_gettime(CLOCK_REALTIME, &ts);
     return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
+
+/* ---------------------------------------------------------------- Go bridge
+ * std/gobridge encodes values into byte buffers (see stdlib/gobridge). The
+ * generated shim of a program with Go packages sets gocpy_gobr_hook, which
+ * runs a call on the Go side. Handles of Go values are owned by gobridge.Ref
+ * objects; their finalizers queue the handles, which are released by the
+ * next call. */
+
+int (*gocpy_gobr_hook)(int64_t id, const void *in, int64_t inn, void **out, int64_t *outn,
+                       const uint64_t *rel, int64_t nrel);
+
+static pthread_mutex_t gobr_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t *gobr_rel;
+static int64_t gobr_nrel, gobr_caprel;
+
+#ifdef GOCPY_GC_BOEHM
+static void gobr_finalize(void *obj, void *cd) {
+    (void)cd;
+    uint64_t h = *(uint64_t *)obj;
+    if (h == 0) return;
+    pthread_mutex_lock(&gobr_mu);
+    if (gobr_nrel == gobr_caprel) {
+        int64_t nc = gobr_caprel ? gobr_caprel * 2 : 64;
+        uint64_t *p = (uint64_t *)realloc(gobr_rel, (size_t)nc * sizeof(uint64_t));
+        if (p == NULL) { pthread_mutex_unlock(&gobr_mu); return; }
+        gobr_rel = p;
+        gobr_caprel = nc;
+    }
+    gobr_rel[gobr_nrel++] = h;
+    pthread_mutex_unlock(&gobr_mu);
+}
+#endif
+
+void gocpy_gobr_track(void *ref); /* not in gocpy_rt.h: Gocpy declares it with *gobridge.Ref */
+void gocpy_gobr_track(void *ref) {
+#ifdef GOCPY_GC_BOEHM
+    GC_REGISTER_FINALIZER(ref, gobr_finalize, NULL, NULL, NULL);
+#else
+    (void)ref; /* gc: none never frees, so Go values are never released */
+#endif
+}
+
+void gocpy_gobr_keep(gocpy_iface v) {
+    __asm__ volatile("" : : "r"(v.data), "r"(v.itab) : "memory");
+}
+
+int64_t gocpy_gobr_invoke(int64_t id, gocpy_slice in, gocpy_slice *out) {
+    if (gocpy_gobr_hook == NULL) gocpy_panic("the program has no Go packages (go bridge not linked)");
+    pthread_mutex_lock(&gobr_mu);
+    uint64_t *rel = gobr_rel;
+    int64_t nrel = gobr_nrel;
+    gobr_rel = NULL;
+    gobr_nrel = gobr_caprel = 0;
+    pthread_mutex_unlock(&gobr_mu);
+    void *op = NULL;
+    int64_t on = 0;
+    int st = gocpy_gobr_hook(id, in.data, in.len, &op, &on, rel, nrel);
+    free(rel);
+    if (st == 2) {
+        static char buf[2048];
+        snprintf(buf, sizeof buf, "panic in Go code: %.*s", (int)on, op ? (const char *)op : "?");
+        free(op);
+        gocpy_panic(buf);
+    }
+    gocpy_slice r = { NULL, 0, 0 };
+    if (op != NULL && on > 0) {
+        r.data = gocpy_alloc_atomic_bytes((size_t)on);
+        memcpy(r.data, op, (size_t)on);
+        r.len = r.cap = on;
+    }
+    free(op);
+    *out = r;
+    return st;
+}
+
+typedef struct { uint8_t *p; int64_t len, cap; } gobr_buf;
+
+static void gb_put(gobr_buf *b, const void *src, int64_t n) {
+    if (b->len + n > b->cap) {
+        int64_t nc = b->cap ? b->cap * 2 : 64;
+        while (nc < b->len + n) nc *= 2;
+        uint8_t *p = (uint8_t *)gocpy_alloc_atomic_bytes((size_t)nc);
+        if (b->len) memcpy(p, b->p, (size_t)b->len);
+        b->p = p;
+        b->cap = nc;
+    }
+    memcpy(b->p + b->len, src, (size_t)n);
+    b->len += n;
+}
+static void gb_byte(gobr_buf *b, uint8_t c) { gb_put(b, &c, 1); }
+static void gb_u64(gobr_buf *b, uint64_t v) {
+    uint8_t x[8];
+    for (int i = 0; i < 8; i++) x[i] = (uint8_t)(v >> (8 * i));
+    gb_put(b, x, 8);
+}
+static void gb_str(gobr_buf *b, const void *p, int64_t n) { gb_u64(b, (uint64_t)n); if (n) gb_put(b, p, n); }
+
+static const gocpy_method *gobr_handle_method(const gocpy_typeinfo *t) {
+    return find_method(t, "GocpyHandle", "0()(uint64)");
+}
+
+/* Go reflect.Kind of a Gocpy integer type */
+static int gobr_int_kind(const gocpy_typeinfo *t, bool sign) {
+    static const char *names[] = { "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune" };
+    static const int kinds[] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 8, 5 };
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (strcmp(t->name, names[i]) == 0) return kinds[i];
+    switch (t->size) {
+    case 1: return sign ? 3 : 8;
+    case 2: return sign ? 4 : 9;
+    case 4: return sign ? 5 : 10;
+    default: return sign ? 6 : 11;
+    }
+}
+
+_Noreturn static void gobr_unsupported(const gocpy_typeinfo *t) {
+    static char buf[512];
+    snprintf(buf, sizeof buf, "a Gocpy value of type %s cannot be passed to Go (funcs and channels are not supported)", t ? t->name : "?");
+    gocpy_panic(buf);
+}
+
+/* Struct types being encoded: a field that refers back to one of them
+ * (a *T inside T) is passed as an interface value, because Go cannot build
+ * recursive types at run time. */
+typedef struct { const gocpy_typeinfo *s[64]; int n; } gobr_stack;
+
+static bool gobr_recursive(const gocpy_typeinfo *c, const gobr_stack *st) {
+    const gocpy_typeinfo *x = c;
+    if (x->kind == GOCPY_K_PTR && x->elem != NULL) x = x->elem;
+    if (x->kind != GOCPY_K_STRUCT) return false;
+    for (int i = 0; i < st->n; i++)
+        if (st->s[i] == x) return true;
+    return false;
+}
+
+static void gobr_push(gobr_stack *st, const gocpy_typeinfo *t) {
+    if (st->n == 64) gobr_unsupported(t);
+    st->s[st->n++] = t;
+}
+
+static void gobr_desc(gobr_buf *b, const gocpy_typeinfo *t, gobr_stack *st);
+
+static void gobr_child_desc(gobr_buf *b, const gocpy_typeinfo *c, gobr_stack *st) {
+    if (gobr_recursive(c, st)) gb_byte(b, 'e');
+    else gobr_desc(b, c, st);
+}
+
+static void gobr_desc(gobr_buf *b, const gocpy_typeinfo *t, gobr_stack *st) {
+    if (gobr_handle_method(t) != NULL) { gb_byte(b, 'h'); return; }
+    switch (t->kind) {
+    case GOCPY_K_BOOL: gb_byte(b, 'b'); return;
+    case GOCPY_K_INT: gb_byte(b, 'i'); gb_byte(b, (uint8_t)gobr_int_kind(t, true)); return;
+    case GOCPY_K_UINT: gb_byte(b, 'u'); gb_byte(b, (uint8_t)gobr_int_kind(t, false)); return;
+    case GOCPY_K_FLOAT: gb_byte(b, 'f'); gb_byte(b, (uint8_t)t->size); return;
+    case GOCPY_K_STRING: gb_byte(b, 's'); return;
+    case GOCPY_K_SLICE:
+        if (is_byte_slice(t)) { gb_byte(b, 'y'); return; }
+        gb_byte(b, 'l'); gobr_child_desc(b, t->elem, st); return;
+    case GOCPY_K_ARRAY: gb_byte(b, 'a'); gb_u64(b, (uint64_t)t->len); gobr_child_desc(b, t->elem, st); return;
+    case GOCPY_K_MAP: gb_byte(b, 'm'); gobr_child_desc(b, t->key, st); gobr_child_desc(b, t->elem, st); return;
+    case GOCPY_K_PTR: gb_byte(b, 'p'); gobr_child_desc(b, t->elem, st); return;
+    case GOCPY_K_IFACE: gb_byte(b, 'e'); return;
+    case GOCPY_K_STRUCT:
+        gobr_push(st, t);
+        gb_byte(b, 'r');
+        gb_u64(b, (uint64_t)t->nfields);
+        for (int i = 0; i < t->nfields; i++) {
+            gb_str(b, t->fields[i].name, (int64_t)strlen(t->fields[i].name));
+            gobr_child_desc(b, t->fields[i].type, st);
+        }
+        st->n--;
+        return;
+    }
+    gobr_unsupported(t);
+}
+
+static void gobr_any(gobr_buf *b, gocpy_iface v, int depth);
+static void gobr_value(gobr_buf *b, const gocpy_typeinfo *t, const void *p, gobr_stack *st, int depth);
+
+/* a value whose type was described as an interface ('e') by gobr_child_desc */
+static void gobr_dyn(gobr_buf *b, const gocpy_typeinfo *c, const void *p, int depth) {
+    if (c->kind == GOCPY_K_PTR && *(void *const *)p == NULL) { gb_byte(b, 'n'); return; }
+    gobr_stack fresh = { .n = 0 };
+    gobr_desc(b, c, &fresh);
+    fresh.n = 0;
+    gobr_value(b, c, p, &fresh, depth + 1);
+}
+
+static void gobr_child(gobr_buf *b, const gocpy_typeinfo *c, const void *p, gobr_stack *st, int depth) {
+    if (gobr_recursive(c, st)) gobr_dyn(b, c, p, depth);
+    else gobr_value(b, c, p, st, depth + 1);
+}
+
+static void gobr_value(gobr_buf *b, const gocpy_typeinfo *t, const void *p, gobr_stack *st, int depth) {
+    if (depth > 10000) gocpy_panic("a Gocpy value passed to Go is too deeply nested (cyclic data?)");
+    const gocpy_method *hm = gobr_handle_method(t);
+    if (hm != NULL) {
+        uint64_t h = 0;
+        if (!(t->is_ptr && *(void *const *)p == NULL)) h = ((uint64_t (*)(void *))hm->fn)(method_self(t, p));
+        gb_u64(b, h);
+        gb_str(b, NULL, 0);
+        return;
+    }
+    switch (t->kind) {
+    case GOCPY_K_BOOL: gb_byte(b, *(const bool *)p ? 1 : 0); return;
+    case GOCPY_K_INT: {
+        int64_t v;
+        switch (t->size) {
+        case 1: v = *(const int8_t *)p; break;
+        case 2: v = *(const int16_t *)p; break;
+        case 4: v = *(const int32_t *)p; break;
+        default: v = *(const int64_t *)p;
+        }
+        gb_u64(b, (uint64_t)v);
+        return;
+    }
+    case GOCPY_K_UINT: {
+        uint64_t v;
+        switch (t->size) {
+        case 1: v = *(const uint8_t *)p; break;
+        case 2: v = *(const uint16_t *)p; break;
+        case 4: v = *(const uint32_t *)p; break;
+        default: v = *(const uint64_t *)p;
+        }
+        gb_u64(b, v);
+        return;
+    }
+    case GOCPY_K_FLOAT: {
+        double d = t->size == 4 ? (double)*(const float *)p : *(const double *)p;
+        uint64_t u;
+        memcpy(&u, &d, 8);
+        gb_u64(b, u);
+        return;
+    }
+    case GOCPY_K_STRING: { const gocpy_string *s = p; gb_str(b, s->ptr, s->len); return; }
+    case GOCPY_K_SLICE: {
+        const gocpy_slice *s = p;
+        if (is_byte_slice(t)) { gb_str(b, s->data, s->len); return; }
+        if (s->data == NULL && s->len == 0) { gb_u64(b, UINT64_MAX); return; } /* nil slice */
+        gb_u64(b, (uint64_t)s->len);
+        for (int64_t i = 0; i < s->len; i++) gobr_child(b, t->elem, (const uint8_t *)s->data + i * (int64_t)t->elem->size, st, depth);
+        return;
+    }
+    case GOCPY_K_ARRAY:
+        for (int64_t i = 0; i < t->len; i++) gobr_child(b, t->elem, (const uint8_t *)p + i * (int64_t)t->elem->size, st, depth);
+        return;
+    case GOCPY_K_MAP: {
+        gocpy_map *m = *(gocpy_map *const *)p;
+        int64_t n = m ? gocpy_map_len(m) : 0;
+        gb_u64(b, (uint64_t)n);
+        if (m) {
+            int64_t it = 0;
+            void *k, *v;
+            while (gocpy_map_next(m, &it, &k, &v)) {
+                gobr_child(b, t->key, k, st, depth);
+                gobr_child(b, t->elem, v, st, depth);
+            }
+        }
+        return;
+    }
+    case GOCPY_K_PTR: {
+        void *q = *(void *const *)p;
+        gb_byte(b, q ? 1 : 0);
+        if (q) gobr_child(b, t->elem, q, st, depth);
+        return;
+    }
+    case GOCPY_K_IFACE: gobr_any(b, *(const gocpy_iface *)p, depth + 1); return;
+    case GOCPY_K_STRUCT:
+        gobr_push(st, t);
+        for (int i = 0; i < t->nfields; i++) gobr_child(b, t->fields[i].type, (const uint8_t *)p + t->fields[i].offset, st, depth);
+        st->n--;
+        return;
+    }
+    gobr_unsupported(t);
+}
+
+static void gobr_any(gobr_buf *b, gocpy_iface v, int depth) {
+    if (v.itab == NULL) { gb_byte(b, 'n'); return; }
+    const gocpy_typeinfo *t = v.itab->type;
+    gobr_stack st = { .n = 0 };
+    gobr_desc(b, t, &st);
+    st.n = 0;
+    gobr_value(b, t, GOCPY_IFACE_VALP(v), &st, depth);
+}
+
+gocpy_slice gocpy_gobr_encode_any(gocpy_slice buf, gocpy_iface v) {
+    gobr_buf b = { (uint8_t *)buf.data, buf.len, buf.cap };
+    gobr_any(&b, v, 0);
+    return (gocpy_slice){ b.p, b.len, b.cap };
+}
+
+/* fatal error with a Gocpy message (std/gobridge) */
+void gocpy_gobr_fatal(gocpy_string msg) {
+    char *m = cstr(msg);
+    gocpy_panic(m);
+}

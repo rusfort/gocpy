@@ -400,6 +400,9 @@ func (s *server) buildIndex(pa *pkgAnalysis) {
 	}
 	qual := a.Prog.Qual
 	record := func(id *ast.Ident, o types.Object, def bool) {
+		if hiddenName(id.Name) && !strings.HasPrefix(id.Name, "GocpyGet_") && !strings.HasPrefix(id.Name, "GocpySet_") {
+			return // generated for Go values (composite literals, new)
+		}
 		file := id.NamePos.File
 		if _, ok := pa.files[file]; !ok {
 			return
@@ -508,6 +511,9 @@ func (s *server) buildIndex(pa *pkgAnalysis) {
 				if o.key != "" {
 					pa.objs[o.key] = fn
 				}
+			}
+			if strings.HasPrefix(id.Name, "GocpyGet_") || strings.HasPrefix(id.Name, "GocpySet_") {
+				o.cls = "field" // a field of a Go value
 			}
 		case types.IfaceMethodSel:
 			o.cls = "funcMethod"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -440,5 +441,51 @@ func TestLSPStdSources(t *testing.T) {
 	}
 	if !got["std/http"] || !got["std/udp"] || !got["std/fmt"] {
 		t.Errorf("import completion: %v", got)
+	}
+}
+
+const goTypesSrc = `package main
+
+import (
+    "std/fmt"
+    "net/url"
+)
+
+func main() {
+    u, err := url.Parse("http://example.com/a")
+    u.Path = "/b"
+    fmt.Println(u.Host, err)
+}
+`
+
+func TestLSPGoTypes(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain not found")
+	}
+	dir := t.TempDir()
+	t.Setenv("GOCPY_CACHE", t.TempDir())
+	os.WriteFile(filepath.Join(dir, "gocpy.yml"), []byte("module: example.com/app\n"), 0o644)
+	mainPath := filepath.Join(dir, "main.gocpy")
+	os.WriteFile(mainPath, []byte(goTypesSrc), 0o644)
+	c := startClient(t, dir)
+	uri := c.open(mainPath)
+	if d := c.waitDiags(uri); len(d) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", d)
+	}
+	var loc Location
+	c.call("textDocument/definition", tdp(uri, posOf(t, goTypesSrc, "u.Host", 3)), &loc)
+	if !strings.HasSuffix(uriToPath(loc.URI), filepath.Join("net", "url", "url.go")) {
+		t.Errorf("definition u.Host: %+v", loc)
+	}
+	src2 := strings.Replace(goTypesSrc, "    u.Path = \"/b\"", "    u.Path = \"/b\"\n    u.", 1)
+	c.change(uri, 2, src2)
+	var cl struct{ Items []CompletionItem }
+	c.call("textDocument/completion", tdp(uri, posOf(t, src2, "    u.\n", 6)), &cl)
+	got := map[string]bool{}
+	for _, it := range cl.Items {
+		got[it.Label] = true
+	}
+	if !got["Host"] || !got["Hostname"] || !got["Query"] || got["GocpyHandle"] || got["GocpyRef"] || got["GocpyGet_Host"] {
+		t.Errorf("u. completion: %v", got)
 	}
 }

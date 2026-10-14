@@ -2,7 +2,14 @@
 //
 // This program runs with the user's Go toolchain inside the bridge module.
 // It reads the exported API of the requested Go packages from compiler
-// export data and writes bridge/bridge.go (cgo exports) and api.json.
+// export data and writes
+//   - bridge/bridge.go: the table of Go functions called through the bridge
+//     (functions, methods, field accessors, variables, constructors);
+//   - stubs/p<N>/<name>.gocpy: a Gocpy package per Go package;
+//   - api.json: the list of packages.
+//
+// Requested packages get their full API. Packages whose types appear in it
+// get stubs with these types (methods and fields) only.
 package main
 
 import (
@@ -17,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,23 +32,6 @@ import (
 
 type request struct {
 	Packages []string `json:"packages"`
-}
-
-type fn struct {
-	Name    string   `json:"name"`
-	ID      string   `json:"id"`
-	Params  []string `json:"params"`
-	Results []string `json:"results"`
-	Error   bool     `json:"error"`
-	Names   []string `json:"names"` // Go parameter names
-	Pos     string   `json:"pos"`   // file:line:col of the Go declaration
-}
-
-type cst struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value string `json:"value"`
-	Pos   string `json:"pos"`
 }
 
 var fset = token.NewFileSet()
@@ -53,16 +44,20 @@ func posOf(p token.Pos) string {
 	if pp.Filename == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s:%d:%d", pp.Filename, pp.Line, pp.Column)
+	file := pp.Filename
+	if strings.HasPrefix(file, "$GOROOT") && goroot != "" {
+		file = filepath.Join(goroot, strings.TrimPrefix(file, "$GOROOT"))
+	}
+	return fmt.Sprintf("%s:%d:%d", file, pp.Line, pp.Column)
 }
 
-type pkgOut struct {
-	Path        string            `json:"path"`
-	Name        string            `json:"name"`
-	Funcs       []fn              `json:"funcs"`
-	Consts      []cst             `json:"consts"`
-	Unsupported map[string]string `json:"unsupported"`
-}
+var goroot = func() string {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}()
 
 func fail(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "gocpy go bridge: "+f+"\n", a...)
@@ -71,61 +66,327 @@ func fail(f string, a ...any) {
 
 var errorType = types.Universe.Lookup("error").Type()
 
-// gocpyType maps a Go type to its Gocpy spelling.
-func gocpyType(t types.Type) (string, bool) {
-	switch u := t.Underlying().(type) {
-	case *types.Basic:
-		switch u.Kind() {
-		case types.Bool:
-			return "bool", true
-		case types.Int:
-			return "int", true
-		case types.Int8:
-			return "int8", true
-		case types.Int16:
-			return "int16", true
-		case types.Int32:
-			return "int32", true
-		case types.Int64:
-			return "int64", true
-		case types.Uint:
-			return "uint", true
-		case types.Uint8:
-			return "uint8", true
-		case types.Uint16:
-			return "uint16", true
-		case types.Uint32:
-			return "uint32", true
-		case types.Uint64:
-			return "uint64", true
-		case types.Uintptr:
-			return "uintptr", true
-		case types.Float32:
-			return "float32", true
-		case types.Float64:
-			return "float64", true
-		case types.String:
-			return "string", true
-		}
-	case *types.Slice:
-		if b, ok := u.Elem().Underlying().(*types.Basic); ok && b.Kind() == types.Uint8 {
-			return "[]byte", true
-		}
-	}
-	return "", false
+// ---------------------------------------------------------------- type model
+
+// bt is the bridge view of a Go type.
+type bt struct {
+	k     string // bool int uint float string bytes error any iface named ptr list array map
+	basic string // Gocpy basic type (int, uint and float kinds)
+	elem  *bt
+	key   *bt
+	n     int64
+	named *types.Named // iface, named, ptr (the element)
 }
 
-var cTypes = map[string]string{
-	"bool": "C.bool", "int": "C.int64_t", "int8": "C.int8_t", "int16": "C.int16_t", "int32": "C.int32_t",
-	"int64": "C.int64_t", "uint": "C.uint64_t", "uint8": "C.uint8_t", "uint16": "C.uint16_t",
-	"uint32": "C.uint32_t", "uint64": "C.uint64_t", "uintptr": "C.uintptr_t", "float32": "C.float",
-	"float64": "C.double",
+func (b *bt) id() string {
+	switch b.k {
+	case "int", "uint", "float":
+		return b.basic
+	case "iface", "named":
+		return b.k + ":" + b.named.Obj().Pkg().Path() + "." + b.named.Obj().Name()
+	case "ptr":
+		return "*" + b.named.Obj().Pkg().Path() + "." + b.named.Obj().Name()
+	case "list":
+		return "[]" + b.elem.id()
+	case "array":
+		return fmt.Sprintf("[%d]%s", b.n, b.elem.id())
+	case "map":
+		return "map[" + b.key.id() + "]" + b.elem.id()
+	}
+	return b.k
+}
+
+// heavy: values that hold Go handles (kept alive across a call)
+func (b *bt) heavy() bool {
+	switch b.k {
+	case "bool", "int", "uint", "float", "string", "bytes":
+		return false
+	}
+	return true
+}
+
+var basicNames = map[types.BasicKind]string{
+	types.Bool: "bool", types.Int: "int", types.Int8: "int8", types.Int16: "int16", types.Int32: "int32",
+	types.Int64: "int64", types.Uint: "uint", types.Uint8: "uint8", types.Uint16: "uint16", types.Uint32: "uint32",
+	types.Uint64: "uint64", types.Uintptr: "uintptr", types.Float32: "float32", types.Float64: "float64",
+	types.String: "string",
+}
+
+func basicBT(b *types.Basic) (*bt, string) {
+	name, ok := basicNames[b.Kind()]
+	if !ok {
+		switch b.Kind() {
+		case types.Complex64, types.Complex128:
+			return nil, "complex numbers are not supported"
+		case types.UnsafePointer:
+			return nil, "unsafe.Pointer is not supported"
+		}
+		return nil, fmt.Sprintf("type %s is not supported", b)
+	}
+	switch {
+	case b.Kind() == types.Bool:
+		return &bt{k: "bool"}, ""
+	case b.Kind() == types.String:
+		return &bt{k: "string"}, ""
+	case b.Info()&types.IsFloat != 0:
+		return &bt{k: "float", basic: name}, ""
+	case b.Info()&types.IsUnsigned != 0:
+		return &bt{k: "uint", basic: name}, ""
+	}
+	return &bt{k: "int", basic: name}, ""
+}
+
+func badPath(path string) bool {
+	for _, el := range strings.Split(path, "/") {
+		if el == "internal" || el == "vendor" {
+			return true
+		}
+	}
+	return false
+}
+
+// typeWhy reports why a named type cannot be bridged ("" if it can).
+func typeWhy(n *types.Named) string {
+	obj := n.Obj()
+	if obj.Pkg() == nil {
+		return fmt.Sprintf("type %s is not supported", n)
+	}
+	switch {
+	case !obj.Exported():
+		return fmt.Sprintf("unexported Go type %s", n)
+	case n.TypeParams().Len() > 0 || n.TypeArgs().Len() > 0:
+		return fmt.Sprintf("generic Go type %s is not supported", n)
+	case badPath(obj.Pkg().Path()):
+		return fmt.Sprintf("Go type %s is in an internal package", n)
+	case obj.Name() == "Exception" || strings.HasPrefix(obj.Name(), "Gocpy"):
+		return fmt.Sprintf("Go type %s clashes with a Gocpy name", n)
+	case obj.Pkg().Name() == "main":
+		return fmt.Sprintf("Go type %s is in a command", n)
+	}
+	return ""
+}
+
+type model struct {
+	pkgs  map[string]*pkgInfo
+	order []*pkgInfo
+	queue []*types.Named
+	seen  map[*types.Named]bool
+}
+
+type pkgInfo struct {
+	pkg    *types.Package
+	direct bool
+	types  []*types.Named
+	idx    int
+}
+
+func (m *model) info(p *types.Package) *pkgInfo {
+	pi := m.pkgs[p.Path()]
+	if pi == nil {
+		pi = &pkgInfo{pkg: p, idx: len(m.order)}
+		m.pkgs[p.Path()] = pi
+		m.order = append(m.order, pi)
+	}
+	return pi
+}
+
+func (m *model) need(n *types.Named) {
+	n = n.Origin()
+	if m.seen[n] {
+		return
+	}
+	m.seen[n] = true
+	pi := m.info(n.Obj().Pkg())
+	pi.types = append(pi.types, n)
+	m.queue = append(m.queue, n)
+}
+
+// bt maps a Go type (and records the named types it needs).
+func (m *model) bt(t types.Type) (*bt, string) {
+	t = types.Unalias(t)
+	if types.Identical(t, errorType) {
+		return &bt{k: "error"}, ""
+	}
+	switch u := t.(type) {
+	case *types.Named:
+		if b, ok := u.Underlying().(*types.Basic); ok {
+			return basicBT(b)
+		}
+		if why := typeWhy(u); why != "" {
+			return nil, why
+		}
+		if it, ok := u.Underlying().(*types.Interface); ok {
+			if it.Empty() {
+				return &bt{k: "any"}, ""
+			}
+			m.need(u)
+			return &bt{k: "iface", named: u}, ""
+		}
+		m.need(u)
+		return &bt{k: "named", named: u}, ""
+	case *types.Basic:
+		return basicBT(u)
+	case *types.Pointer:
+		e, ok := types.Unalias(u.Elem()).(*types.Named)
+		if !ok {
+			return nil, fmt.Sprintf("pointer type %s is not supported", t)
+		}
+		switch e.Underlying().(type) {
+		case *types.Basic:
+			return nil, fmt.Sprintf("pointer type %s is not supported", t)
+		case *types.Interface:
+			return nil, fmt.Sprintf("pointer to an interface (%s) is not supported", t)
+		}
+		if why := typeWhy(e); why != "" {
+			return nil, why
+		}
+		m.need(e)
+		return &bt{k: "ptr", named: e}, ""
+	case *types.Slice:
+		if b, ok := types.Unalias(u.Elem()).(*types.Basic); ok && b.Kind() == types.Uint8 {
+			return &bt{k: "bytes"}, ""
+		}
+		e, why := m.bt(u.Elem())
+		if why != "" {
+			return nil, why
+		}
+		return &bt{k: "list", elem: e}, ""
+	case *types.Array:
+		e, why := m.bt(u.Elem())
+		if why != "" {
+			return nil, why
+		}
+		return &bt{k: "array", elem: e, n: u.Len()}, ""
+	case *types.Map:
+		k, why := m.bt(u.Key())
+		if why != "" {
+			return nil, why
+		}
+		switch k.k {
+		case "bool", "int", "uint", "float", "string":
+		default:
+			return nil, fmt.Sprintf("map type %s is not supported (keys must be basic types)", t)
+		}
+		e, why := m.bt(u.Elem())
+		if why != "" {
+			return nil, why
+		}
+		return &bt{k: "map", key: k, elem: e}, ""
+	case *types.Interface:
+		if u.Empty() {
+			return &bt{k: "any"}, ""
+		}
+		return nil, fmt.Sprintf("unnamed interface type %s is not supported", t)
+	case *types.Signature:
+		return nil, "func values (callbacks) are not supported"
+	case *types.Chan:
+		return nil, "channels are not supported"
+	case *types.Struct:
+		return nil, "unnamed struct types are not supported"
+	case *types.TypeParam:
+		return nil, "generics are not supported"
+	}
+	return nil, fmt.Sprintf("type %s is not supported", t)
+}
+
+// ---------------------------------------------------------------- API items
+
+type param struct {
+	name string
+	t    *bt
+}
+
+type sigInfo struct {
+	params   []param
+	results  []*bt
+	variadic bool
+}
+
+func (m *model) sig(s *types.Signature) (*sigInfo, string) {
+	if s.TypeParams().Len() > 0 {
+		return nil, "generic Go functions are not supported"
+	}
+	si := &sigInfo{variadic: s.Variadic()}
+	for i := 0; i < s.Params().Len(); i++ {
+		p := s.Params().At(i)
+		b, why := m.bt(p.Type())
+		if why != "" {
+			return nil, fmt.Sprintf("parameter %d: %s", i+1, why)
+		}
+		si.params = append(si.params, param{p.Name(), b})
+	}
+	for i := 0; i < s.Results().Len(); i++ {
+		b, why := m.bt(s.Results().At(i).Type())
+		if why != "" {
+			return nil, fmt.Sprintf("result %d: %s", i+1, why)
+		}
+		si.results = append(si.results, b)
+	}
+	return si, ""
+}
+
+// entry of the Go function table
+type entry struct {
+	goExpr string
+}
+
+type method struct {
+	name string
+	id   int
+	sig  *sigInfo
+	pos  string
+}
+
+type field struct {
+	name     string
+	t        *bt
+	get, set int
+	pos      string
+}
+
+type typeOut struct {
+	n       *types.Named
+	iface   bool
+	methods []method
+	fields  []field
+	ctor    int // -1: none
+	pos     string
+}
+
+type fnOut struct {
+	name string
+	id   int
+	sig  *sigInfo
+	pos  string
+}
+
+type varOut struct {
+	name  string
+	id    int
+	t     *bt
+	pos   string
+	isErr bool
+}
+
+type cst struct {
+	name, typ, value, pos string
+}
+
+type pkgOut struct {
+	types  []*typeOut
+	funcs  []fnOut
+	vars   []varOut
+	consts []cst
+	// named basic types: aliases of the Gocpy basic types
+	aliases []cst
+	unsup   map[string]string
 }
 
 type gen struct {
-	b       bytes.Buffer
-	imports map[string]string // path -> alias
-	n       int
+	m       *model
+	entries []entry
+	imports map[string]string // Go path -> alias in bridge.go
+	errVars []int
 }
 
 func (g *gen) qual(p *types.Package) string {
@@ -138,6 +399,148 @@ func (g *gen) qual(p *types.Package) string {
 }
 
 func (g *gen) goType(t types.Type) string { return types.TypeString(t, g.qual) }
+
+func (g *gen) add(expr string) int {
+	g.entries = append(g.entries, entry{expr})
+	return len(g.entries) - 1
+}
+
+// storedAsPointer: Go values of this named type are kept as pointers to a
+// copy (field getters return the address of the field instead).
+func storedAsPointer(n *types.Named) bool {
+	switch n.Underlying().(type) {
+	case *types.Struct, *types.Array:
+		return true
+	}
+	return false
+}
+
+func (g *gen) typeOut(n *types.Named, po *pkgOut) *typeOut {
+	to := &typeOut{n: n, ctor: -1, pos: posOf(n.Obj().Pos())}
+	qn := g.goType(n)
+	tn := n.Obj().Name()
+	if it, ok := n.Underlying().(*types.Interface); ok {
+		to.iface = true
+		for i := 0; i < it.NumMethods(); i++ {
+			f := it.Method(i)
+			if !f.Exported() {
+				continue
+			}
+			si, why := g.m.sig(f.Type().(*types.Signature))
+			if why != "" {
+				po.unsup[tn+"."+f.Name()] = why
+				continue
+			}
+			to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("%s.%s", qn, f.Name())), si, posOf(f.Pos())})
+		}
+		return to
+	}
+	ms := types.NewMethodSet(types.NewPointer(n))
+	names := map[string]bool{}
+	for i := 0; i < ms.Len(); i++ {
+		f := ms.At(i).Obj().(*types.Func)
+		names[f.Name()] = true
+		if !f.Exported() {
+			continue
+		}
+		if strings.HasPrefix(f.Name(), "Gocpy") {
+			continue
+		}
+		si, why := g.m.sig(f.Type().(*types.Signature))
+		if why != "" {
+			po.unsup[tn+"."+f.Name()] = why
+			continue
+		}
+		to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("(*%s).%s", qn, f.Name())), si, posOf(f.Pos())})
+	}
+	switch n.Underlying().(type) {
+	case *types.Struct:
+		for _, f := range promotedFields(n) {
+			if names[f.Name()] || strings.HasPrefix(f.Name(), "Gocpy") {
+				continue
+			}
+			b, why := g.m.bt(f.Type())
+			if why != "" {
+				po.unsup[tn+"."+f.Name()] = why
+				continue
+			}
+			ft := g.goType(f.Type())
+			get := fmt.Sprintf("func(x *%s) %s { return x.%s }", qn, ft, f.Name())
+			if fn, ok := types.Unalias(f.Type()).(*types.Named); ok && b.k == "named" && storedAsPointer(fn) {
+				get = fmt.Sprintf("func(x *%s) *%s { return &x.%s }", qn, ft, f.Name())
+			}
+			fo := field{name: f.Name(), t: b, pos: posOf(f.Pos())}
+			fo.get = g.add(get)
+			fo.set = g.add(fmt.Sprintf("func(x *%s, v %s) { x.%s = v }", qn, ft, f.Name()))
+			to.fields = append(to.fields, fo)
+		}
+		to.ctor = g.add(fmt.Sprintf("func() *%s { return new(%s) }", qn, qn))
+	case *types.Map:
+		to.ctor = g.add(fmt.Sprintf("func() *%s { v := make(%s); return &v }", qn, qn))
+	case *types.Array:
+		to.ctor = g.add(fmt.Sprintf("func() *%s { return new(%s) }", qn, qn))
+	}
+	return to
+}
+
+// promotedFields lists the exported fields of a struct type, including
+// fields promoted from embedded structs (the shallowest unambiguous one).
+func promotedFields(n *types.Named) []*types.Var {
+	type level struct {
+		t   types.Type
+		via bool
+	}
+	var out []*types.Var
+	seen := map[string]bool{}
+	cur := []types.Type{n}
+	visited := map[types.Type]bool{}
+	for depth := 0; len(cur) > 0 && depth < 8; depth++ {
+		count := map[string]int{}
+		found := map[string]*types.Var{}
+		var next []types.Type
+		for _, t := range cur {
+			if p, ok := t.(*types.Pointer); ok {
+				t = p.Elem()
+			}
+			t = types.Unalias(t)
+			if visited[t] {
+				continue
+			}
+			visited[t] = true
+			st, ok := t.Underlying().(*types.Struct)
+			if !ok {
+				continue
+			}
+			for i := 0; i < st.NumFields(); i++ {
+				f := st.Field(i)
+				count[f.Name()]++
+				found[f.Name()] = f
+				if f.Embedded() {
+					next = append(next, f.Type())
+				}
+			}
+		}
+		var names []string
+		for name := range found {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			if count[name] == 1 && found[name].Exported() {
+				out = append(out, found[name])
+			}
+		}
+		cur = next
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Pos() < out[j].Pos() })
+	return out
+}
+
+// ---------------------------------------------------------------- main
 
 func main() {
 	if len(os.Args) != 2 {
@@ -185,17 +588,28 @@ func main() {
 		return os.Open(f)
 	})
 
-	g := &gen{imports: map[string]string{}}
-	var pkgs []pkgOut
+	m := &model{pkgs: map[string]*pkgInfo{}, seen: map[*types.Named]bool{}}
+	g := &gen{m: m, imports: map[string]string{}}
+	outs := map[*pkgInfo]*pkgOut{}
+	pout := func(pi *pkgInfo) *pkgOut {
+		po := outs[pi]
+		if po == nil {
+			po = &pkgOut{unsup: map[string]string{}}
+			outs[pi] = po
+		}
+		return po
+	}
 	for _, path := range req.Packages {
 		pkg, err := imp.Import(path)
 		if err != nil {
 			fail("import %s: %v", path, err)
 		}
-		po := pkgOut{Path: path, Name: pkg.Name(), Unsupported: map[string]string{}}
 		if pkg.Name() == "main" {
 			fail("%s is a Go command (package main), not a library", path)
 		}
+		pi := m.info(pkg)
+		pi.direct = true
+		po := pout(pi)
 		names := pkg.Scope().Names()
 		sort.Strings(names)
 		for _, name := range names {
@@ -203,208 +617,568 @@ func main() {
 			if !obj.Exported() {
 				continue
 			}
+			if name == "Exception" || strings.HasPrefix(name, "Gocpy") {
+				po.unsup[name] = "the name clashes with a Gocpy name"
+				continue
+			}
 			switch obj := obj.(type) {
 			case *types.Func:
-				f, why := g.function(pkg, obj)
+				si, why := m.sig(obj.Type().(*types.Signature))
 				if why != "" {
-					po.Unsupported[name] = why
+					po.unsup[name] = why
 					continue
 				}
-				po.Funcs = append(po.Funcs, f)
+				id := g.add(fmt.Sprintf("%s.%s", g.qual(pkg), name))
+				po.funcs = append(po.funcs, fnOut{name, id, si, posOf(obj.Pos())})
 			case *types.Const:
 				c, why := constDecl(obj)
 				if why != "" {
-					po.Unsupported[name] = why
+					po.unsup[name] = why
 					continue
 				}
-				po.Consts = append(po.Consts, c)
+				po.consts = append(po.consts, c)
 			case *types.TypeName:
-				po.Unsupported[name] = "Go types are not supported by the bridge yet (functions and constants only)"
+				n, ok := obj.Type().(*types.Named)
+				if !ok || obj.IsAlias() {
+					if _, why := m.bt(obj.Type()); why != "" {
+						po.unsup[name] = why
+					} else {
+						po.unsup[name] = "Go type aliases are not supported (use the original type)"
+					}
+					continue
+				}
+				if bb, isBasic := n.Underlying().(*types.Basic); isBasic {
+					if bn, ok := basicNames[bb.Kind()]; ok {
+						po.aliases = append(po.aliases, cst{name: name, typ: bn, pos: posOf(obj.Pos())})
+					} else {
+						po.unsup[name] = fmt.Sprintf("type %s is not supported", bb)
+					}
+					continue
+				}
+				if why := typeWhy(n); why != "" {
+					po.unsup[name] = why
+					continue
+				}
+				if it, ok := n.Underlying().(*types.Interface); ok && it.Empty() {
+					po.unsup[name] = name + " is any in Gocpy"
+					continue
+				}
+				m.need(n)
 			case *types.Var:
-				po.Unsupported[name] = "Go package variables are not supported by the bridge yet (functions and constants only)"
+				b, why := m.bt(obj.Type())
+				if why != "" {
+					po.unsup[name] = why
+					continue
+				}
+				expr := fmt.Sprintf("func() %s { return %s.%s }", g.goType(obj.Type()), g.qual(pkg), name)
+				if n, ok := types.Unalias(obj.Type()).(*types.Named); ok && b.k == "named" && storedAsPointer(n) {
+					expr = fmt.Sprintf("func() *%s { return &%s.%s }", g.goType(obj.Type()), g.qual(pkg), name)
+				}
+				id := g.add(expr)
+				if b.k == "error" {
+					g.errVars = append(g.errVars, id)
+				}
+				po.vars = append(po.vars, varOut{name, id, b, posOf(obj.Pos()), b.k == "error"})
 			}
 		}
-		pkgs = append(pkgs, po)
+	}
+	// the closure of named types
+	done := map[*types.Named]*typeOut{}
+	for len(m.queue) > 0 {
+		n := m.queue[0]
+		m.queue = m.queue[1:]
+		pi := m.pkgs[n.Obj().Pkg().Path()]
+		po := pout(pi)
+		to := g.typeOut(n, po)
+		done[n] = to
+		po.types = append(po.types, to)
 	}
 
+	writeBridge(g)
+	var api []map[string]any
+	for _, pi := range m.order {
+		po := pout(pi)
+		rel := filepath.ToSlash(filepath.Join("stubs", fmt.Sprintf("p%d", pi.idx), pi.pkg.Name()+".gocpy"))
+		src := stubSource(m, pi, po)
+		p := filepath.FromSlash(rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			fail("%v", err)
+		}
+		api = append(api, map[string]any{"path": pi.pkg.Path(), "name": pi.pkg.Name(), "stub": rel, "unsupported": po.unsup, "direct": pi.direct})
+	}
+	js, _ := json.MarshalIndent(map[string]any{"packages": api, "functions": len(g.entries)}, "", "  ")
+	if err := os.WriteFile("api.json", js, 0o644); err != nil {
+		fail("%v", err)
+	}
+}
+
+func writeBridge(g *gen) {
 	var src bytes.Buffer
-	src.WriteString("// Code generated by gocpy (Go bridge); DO NOT EDIT.\npackage main\n\n")
-	src.WriteString("/*\n#include <stdint.h>\n#include <stdbool.h>\n#include <stdlib.h>\n*/\nimport \"C\"\n\n")
-	src.WriteString("import (\n\t\"fmt\"\n\t\"unsafe\"\n")
+	var table strings.Builder
+	for i, e := range g.entries {
+		fmt.Fprintf(&table, "\t/* %d */ reflect.ValueOf(%s),\n", i, e.goExpr)
+	}
+	src.WriteString("// Code generated by gocpy (Go bridge); DO NOT EDIT.\npackage main\n\nimport (\n\t\"reflect\"\n")
 	var paths []string
 	for p := range g.imports {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
 	for _, p := range paths {
-		fmt.Fprintf(&src, "\t%s %q\n", g.imports[p], p)
+		a := g.imports[p]
+		if regexp.MustCompile(`\b` + a + `\.`).MatchString(table.String()) {
+			fmt.Fprintf(&src, "\t%s %q\n", a, p)
+		}
 	}
-	src.WriteString(")\n\nfunc main() {}\n\n")
-	src.WriteString(`var _ = fmt.Sprint
-
-func gocpyStr(p **C.char, n *C.int64_t, s string) {
-	*n = C.int64_t(len(s))
-	if len(s) == 0 {
-		*p = nil
-		return
+	src.WriteString(")\n\nvar fns = []reflect.Value{\n")
+	src.WriteString(table.String())
+	src.WriteString("}\n\n// variables of type error (their values are compared by identity)\nvar errVars = map[int]bool{")
+	for i, id := range g.errVars {
+		if i > 0 {
+			src.WriteString(", ")
+		}
+		fmt.Fprintf(&src, "%d: true", id)
 	}
-	m := C.malloc(C.size_t(len(s)))
-	copy(unsafe.Slice((*byte)(m), len(s)), s)
-	*p = (*C.char)(m)
-}
-
-func gocpyBytes(p *unsafe.Pointer, n *C.int64_t, b []byte) {
-	*n = C.int64_t(len(b))
-	if len(b) == 0 {
-		*p = nil
-		return
-	}
-	m := C.malloc(C.size_t(len(b)))
-	copy(unsafe.Slice((*byte)(m), len(b)), b)
-	*p = m
-}
-
-func gocpyPanic(p **C.char, n *C.int64_t, v any) {
-	*p = C.CString(fmt.Sprint(v))
-	*n = -1
-}
-
-`)
-	src.Write(g.b.Bytes())
+	src.WriteString("}\n")
 	if err := os.MkdirAll("bridge", 0o755); err != nil {
 		fail("%v", err)
 	}
 	if err := os.WriteFile(filepath.Join("bridge", "bridge.go"), src.Bytes(), 0o644); err != nil {
 		fail("%v", err)
 	}
-	js, _ := json.MarshalIndent(map[string]any{"packages": pkgs}, "", "  ")
-	if err := os.WriteFile("api.json", js, 0o644); err != nil {
-		fail("%v", err)
-	}
-}
-
-func (g *gen) function(pkg *types.Package, obj *types.Func) (fn, string) {
-	sig := obj.Type().(*types.Signature)
-	if sig.TypeParams().Len() > 0 {
-		return fn{}, "generic Go functions are not supported by the bridge"
-	}
-	if sig.Variadic() {
-		return fn{}, "variadic Go functions are not supported by the bridge yet"
-	}
-	f := fn{Name: obj.Name(), Pos: posOf(obj.Pos())}
-	for i := 0; i < sig.Params().Len(); i++ {
-		f.Names = append(f.Names, sig.Params().At(i).Name())
-		t := sig.Params().At(i).Type()
-		gt, ok := gocpyType(t)
-		if !ok {
-			return fn{}, fmt.Sprintf("parameter %d has type %s, which the Go bridge does not support yet", i+1, t)
-		}
-		f.Params = append(f.Params, gt)
-	}
-	res := sig.Results()
-	for i := 0; i < res.Len(); i++ {
-		t := res.At(i).Type()
-		if i == res.Len()-1 && types.Identical(t, errorType) {
-			f.Error = true
-			break
-		}
-		gt, ok := gocpyType(t)
-		if !ok {
-			return fn{}, fmt.Sprintf("result %d has type %s, which the Go bridge does not support yet", i+1, t)
-		}
-		f.Results = append(f.Results, gt)
-	}
-	g.n++
-	f.ID = fmt.Sprintf("gocpy_gobrx_%d", g.n)
-
-	alias := g.qual(pkg)
-	var params, args []string
-	for i := 0; i < sig.Params().Len(); i++ {
-		t := sig.Params().At(i).Type()
-		gt := f.Params[i]
-		conv := g.goType(t)
-		switch gt {
-		case "string":
-			params = append(params, fmt.Sprintf("a%dp *C.char, a%dn C.int64_t", i, i))
-			args = append(args, fmt.Sprintf("%s(C.GoStringN(a%dp, C.int(a%dn)))", conv, i, i))
-		case "[]byte":
-			params = append(params, fmt.Sprintf("a%dp unsafe.Pointer, a%dn C.int64_t", i, i))
-			args = append(args, fmt.Sprintf("%s(C.GoBytes(a%dp, C.int(a%dn)))", conv, i, i))
-		default:
-			params = append(params, fmt.Sprintf("a%d %s", i, cTypes[gt]))
-			args = append(args, fmt.Sprintf("%s(a%d)", conv, i))
-		}
-	}
-	var lhs []string
-	var stores []string
-	for i, gt := range f.Results {
-		lhs = append(lhs, fmt.Sprintf("r%d", i))
-		switch gt {
-		case "string":
-			params = append(params, fmt.Sprintf("o%dp **C.char, o%dn *C.int64_t", i, i))
-			stores = append(stores, fmt.Sprintf("gocpyStr(o%dp, o%dn, string(r%d))", i, i, i))
-		case "[]byte":
-			params = append(params, fmt.Sprintf("o%dp *unsafe.Pointer, o%dn *C.int64_t", i, i))
-			stores = append(stores, fmt.Sprintf("gocpyBytes(o%dp, o%dn, []byte(r%d))", i, i, i))
-		default:
-			params = append(params, fmt.Sprintf("o%d *%s", i, cTypes[gt]))
-			stores = append(stores, fmt.Sprintf("*o%d = %s(r%d)", i, cTypes[gt], i))
-		}
-	}
-	if f.Error {
-		lhs = append(lhs, "err")
-	}
-	params = append(params, "ep **C.char, en *C.int64_t")
-	b := &g.b
-	fmt.Fprintf(b, "//export %s\nfunc %s(%s) (st C.int) {\n", f.ID, f.ID, strings.Join(params, ", "))
-	fmt.Fprintf(b, "\tdefer func() {\n\t\tif v := recover(); v != nil {\n\t\t\tgocpyPanic(ep, en, v)\n\t\t\tst = 2\n\t\t}\n\t}()\n")
-	call := fmt.Sprintf("%s.%s(%s)", alias, obj.Name(), strings.Join(args, ", "))
-	if len(lhs) > 0 {
-		fmt.Fprintf(b, "\t%s := %s\n", strings.Join(lhs, ", "), call)
-	} else {
-		fmt.Fprintf(b, "\t%s\n", call)
-	}
-	for _, s := range stores {
-		fmt.Fprintf(b, "\t%s\n", s)
-	}
-	if f.Error {
-		b.WriteString("\tif err != nil {\n\t\tgocpyStr(ep, en, err.Error())\n\t\treturn 1\n\t}\n")
-	}
-	b.WriteString("\treturn 0\n}\n\n")
-	return f, ""
 }
 
 func constDecl(obj *types.Const) (cst, string) {
-	c := cst{Name: obj.Name(), Pos: posOf(obj.Pos())}
+	c := cst{name: obj.Name(), pos: posOf(obj.Pos())}
 	t := obj.Type()
 	b, ok := t.Underlying().(*types.Basic)
 	if !ok {
 		return c, "unsupported constant type"
 	}
 	if b.Info()&types.IsUntyped == 0 {
-		gt, ok := gocpyType(t)
+		gt, ok := basicNames[b.Kind()]
 		if !ok {
 			return c, fmt.Sprintf("constant of type %s is not supported by the bridge", t)
 		}
-		c.Type = gt
+		c.typ = gt
 	}
 	v := obj.Val()
 	switch v.Kind() {
 	case constant.Bool:
-		c.Value = strconv.FormatBool(constant.BoolVal(v))
+		c.value = strconv.FormatBool(constant.BoolVal(v))
 	case constant.String:
-		c.Value = strconv.Quote(constant.StringVal(v))
+		c.value = strconv.Quote(constant.StringVal(v))
 	case constant.Int:
-		c.Value = v.ExactString()
+		c.value = v.ExactString()
 	case constant.Float:
 		f, _ := constant.Float64Val(v)
 		s := strconv.FormatFloat(f, 'g', -1, 64)
 		if !strings.ContainsAny(s, ".eEn") {
 			s += ".0"
 		}
-		c.Value = s
+		c.value = s
 	default:
 		return c, "complex constants are not supported"
 	}
 	return c, ""
+}
+
+// ---------------------------------------------------------------- Gocpy stubs
+
+const goPos = "// go:pos "
+
+// reserved: Gocpy keywords and predeclared names (shadowing is forbidden).
+var reserved = map[string]bool{}
+
+func init() {
+	for _, k := range strings.Fields(`break case chan const continue default defer else fallthrough for func go
+		if import in interface map package range return select struct switch type var try catch finally throw unsafe
+		bool byte rune int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr float32 float64 string any
+		error Exception comparable true false nil iota len cap append make new sizeof close delete thread
+		malloc calloc realloc free memcpy memset slice errors gobridge`) {
+		reserved[k] = true
+	}
+}
+
+type stub struct {
+	m       *model
+	pi      *pkgInfo
+	aliases map[string]string // Go path -> alias
+	used    map[string]bool
+	top     map[string]bool
+	helpers map[string]string // bt id -> helper suffix
+	hb      strings.Builder
+	nhelp   int
+}
+
+func (s *stub) qual(n *types.Named) string {
+	p := n.Obj().Pkg()
+	if p.Path() == s.pi.pkg.Path() {
+		return n.Obj().Name()
+	}
+	a, ok := s.aliases[p.Path()]
+	if !ok {
+		base := p.Name()
+		a = base
+		for i := 2; s.used[a] || reserved[a] || a == s.pi.pkg.Name(); i++ {
+			a = fmt.Sprintf("%s%d", base, i)
+		}
+		s.used[a] = true
+		s.aliases[p.Path()] = a
+	}
+	return a + "." + n.Obj().Name()
+}
+
+func (s *stub) spell(b *bt) string {
+	switch b.k {
+	case "int", "uint", "float":
+		return b.basic
+	case "bytes":
+		return "[]byte"
+	case "iface", "named":
+		return s.qual(b.named)
+	case "ptr":
+		return "*" + s.qual(b.named)
+	case "list":
+		return "[]" + s.spell(b.elem)
+	case "array":
+		return fmt.Sprintf("[%d]%s", b.n, s.spell(b.elem))
+	case "map":
+		return "map[" + s.spell(b.key) + "]" + s.spell(b.elem)
+	}
+	return b.k // bool string error any
+}
+
+// implName: the Gocpy type used for Go values of an interface type whose
+// dynamic type has no Gocpy counterpart.
+func (s *stub) implName(n *types.Named) string {
+	q := s.qual(n)
+	if i := strings.LastIndex(q, "."); i >= 0 {
+		return q[:i+1] + "GocpyImpl_" + q[i+1:]
+	}
+	return "GocpyImpl_" + q
+}
+
+// enc returns a statement encoding x into e.
+func (s *stub) enc(b *bt, x, e string) string {
+	switch b.k {
+	case "bool":
+		return fmt.Sprintf("%s.Bool(%s)", e, x)
+	case "int":
+		return fmt.Sprintf("%s.Int(int64(%s))", e, x)
+	case "uint":
+		return fmt.Sprintf("%s.Uint(uint64(%s))", e, x)
+	case "float":
+		return fmt.Sprintf("%s.Float(float64(%s))", e, x)
+	case "string":
+		return fmt.Sprintf("%s.String(%s)", e, x)
+	case "bytes":
+		return fmt.Sprintf("%s.Bytes(%s)", e, x)
+	case "error":
+		return fmt.Sprintf("%s.Err(%s)", e, x)
+	case "any":
+		return fmt.Sprintf("%s.Any(%s)", e, x)
+	case "iface":
+		return fmt.Sprintf("%s.Handle(gobridge.HandleOf(%s))", e, x)
+	case "named":
+		return fmt.Sprintf("%s.Handle(%s.GocpyRef.H())", e, x)
+	}
+	return fmt.Sprintf("gocpyEnc%s(%s, %s)", s.helper(b), e, x)
+}
+
+// dec returns an expression decoding a value from d.
+func (s *stub) dec(b *bt, d string) string {
+	switch b.k {
+	case "bool":
+		return d + ".Bool()"
+	case "int":
+		if b.basic == "int64" {
+			return d + ".Int()"
+		}
+		return fmt.Sprintf("%s(%s.Int())", b.basic, d)
+	case "uint":
+		if b.basic == "uint64" {
+			return d + ".Uint()"
+		}
+		return fmt.Sprintf("%s(%s.Uint())", b.basic, d)
+	case "float":
+		if b.basic == "float64" {
+			return d + ".Float()"
+		}
+		return fmt.Sprintf("%s(%s.Float())", b.basic, d)
+	case "string":
+		return d + ".String()"
+	case "bytes":
+		return d + ".Bytes()"
+	case "error":
+		return d + ".Err()"
+	case "any":
+		return d + ".Any()"
+	}
+	return fmt.Sprintf("gocpyDec%s(%s)", s.helper(b), d)
+}
+
+// helper emits (once) the encoder and decoder functions of a composite type.
+func (s *stub) helper(b *bt) string {
+	id := b.id()
+	if h, ok := s.helpers[id]; ok {
+		return h
+	}
+	s.nhelp++
+	h := fmt.Sprintf("_%d", s.nhelp)
+	s.helpers[id] = h
+	t := s.spell(b)
+	w := &s.hb
+	switch b.k {
+	case "named":
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, _ := d.Handle()\n\treturn %s{GocpyRef: gobridge.NewRef(h)}\n}\n", h, t, t)
+	case "ptr":
+		q := s.qual(b.named)
+		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\tif v == nil {\n\t\te.Handle(0)\n\t\treturn\n\t}\n\te.Handle(v.GocpyRef.H())\n}\n", h, t)
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, _ := d.Handle()\n\tif h == 0 {\n\t\treturn nil\n\t}\n\treturn &%s{GocpyRef: gobridge.NewRef(h)}\n}\n", h, t, q)
+	case "iface":
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, name := d.Handle()\n\tif h == 0 {\n\t\treturn nil\n\t}\n\tr := gobridge.NewRef(h)\n\tv := gobridge.Make(r, name)\n\tif x, ok := v.(%s); ok {\n\t\treturn x\n\t}\n\treturn %s{GocpyRef: r}\n}\n", h, t, t, s.implName(b.named))
+	case "list":
+		et := s.spell(b.elem)
+		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\te.Len(len(v))\n\tfor i := 0; i < len(v); i++ {\n\t\t%s\n\t}\n}\n", h, t, s.enc(b.elem, "v[i]", "e"))
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\tn := d.Len()\n\tif n == 0 {\n\t\treturn nil\n\t}\n\tout := make([]%s, n)\n\tfor i := 0; i < n; i++ {\n\t\tout[i] = %s\n\t}\n\treturn out\n}\n", h, t, et, s.dec(b.elem, "d"))
+	case "array":
+		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\tfor i := 0; i < %d; i++ {\n\t\t%s\n\t}\n}\n", h, t, b.n, s.enc(b.elem, "v[i]", "e"))
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\tvar out %s\n\tfor i := 0; i < %d; i++ {\n\t\tout[i] = %s\n\t}\n\treturn out\n}\n", h, t, t, b.n, s.dec(b.elem, "d"))
+	case "map":
+		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\te.Len(len(v))\n\tfor k, x in v {\n\t\t%s\n\t\t%s\n\t}\n}\n", h, t, s.enc(b.key, "k", "e"), s.enc(b.elem, "x", "e"))
+		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\tn := d.Len()\n\tout := %s{}\n\tfor i := 0; i < n; i++ {\n\t\tk := %s\n\t\tout[k] = %s\n\t}\n\treturn out\n}\n", h, t, t, s.dec(b.key, "d"), s.dec(b.elem, "d"))
+	}
+	return h
+}
+
+func resultList(rs []string) string {
+	switch len(rs) {
+	case 0:
+		return ""
+	case 1:
+		return " " + rs[0]
+	}
+	return " (" + strings.Join(rs, ", ") + ")"
+}
+
+// names picks readable, non-conflicting parameter names.
+func (s *stub) names(ps []param) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i, p := range ps {
+		n := p.name
+		if n == "" || n == "_" || seen[n] || s.top[n] || reserved[n] || strings.HasPrefix(n, "gocpy") || s.pkgName(n) {
+			n = fmt.Sprintf("a%d", i)
+			for seen[n] || s.top[n] {
+				n += "_"
+			}
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+// pkgName: n may be the alias of an imported package in some stub.
+func (s *stub) pkgName(n string) bool {
+	for _, pi := range s.m.order {
+		if pi.pkg.Name() == n {
+			return true
+		}
+	}
+	return false
+}
+
+// sigText: "(a T, b ...U) (R, error)"
+func (s *stub) sigText(si *sigInfo, names []string) string {
+	var ps []string
+	for i, p := range si.params {
+		t := s.spell(p.t)
+		if si.variadic && i == len(si.params)-1 {
+			t = "..." + s.spell(p.t.elem)
+			if p.t.k == "bytes" {
+				t = "...byte"
+			}
+		}
+		if names != nil {
+			ps = append(ps, names[i]+" "+t)
+		} else {
+			ps = append(ps, t)
+		}
+	}
+	var rs []string
+	for _, r := range si.results {
+		rs = append(rs, s.spell(r))
+	}
+	return "(" + strings.Join(ps, ", ") + ")" + resultList(rs)
+}
+
+// body of a stub function calling Go function id.
+func (s *stub) body(w *strings.Builder, id int, recv string, ps []param, names []string, results []*bt) {
+	w.WriteString("\tgocpyE := gobridge.NewEncoder()\n")
+	if recv != "" {
+		fmt.Fprintf(w, "\tgocpyE.Handle(%s.GocpyRef.H())\n", recv)
+	}
+	for i, p := range ps {
+		fmt.Fprintf(w, "\t%s\n", s.enc(p.t, names[i], "gocpyE"))
+	}
+	if len(results) == 0 {
+		fmt.Fprintf(w, "\tgobridge.Invoke(%d, gocpyE)\n", id)
+	} else {
+		fmt.Fprintf(w, "\tgocpyD := gobridge.Invoke(%d, gocpyE)\n", id)
+	}
+	var rs []string
+	for i, r := range results {
+		fmt.Fprintf(w, "\tgocpyR%d := %s\n", i, s.dec(r, "gocpyD"))
+		rs = append(rs, fmt.Sprintf("gocpyR%d", i))
+	}
+	if recv != "" {
+		fmt.Fprintf(w, "\tgobridge.KeepAlive(%s)\n", recv)
+	}
+	for i, p := range ps {
+		if p.t.heavy() {
+			fmt.Fprintf(w, "\tgobridge.KeepAlive(%s)\n", names[i])
+		}
+	}
+	if len(rs) > 0 {
+		fmt.Fprintf(w, "\treturn %s\n", strings.Join(rs, ", "))
+	}
+}
+
+func pos(w *strings.Builder, p string) {
+	if p != "" {
+		fmt.Fprintf(w, "%s%s\n", goPos, p)
+	}
+}
+
+func typePath(n *types.Named) string { return n.Obj().Pkg().Path() + "." + n.Obj().Name() }
+
+func stubSource(m *model, pi *pkgInfo, po *pkgOut) string {
+	s := &stub{m: m, pi: pi, aliases: map[string]string{}, used: map[string]bool{"gobridge": true}, top: map[string]bool{}, helpers: map[string]string{}}
+	for _, t := range po.types {
+		s.top[t.n.Obj().Name()] = true
+		s.top["GocpyImpl_"+t.n.Obj().Name()] = true
+	}
+	for _, f := range po.funcs {
+		s.top[f.name] = true
+	}
+	for _, v := range po.vars {
+		s.top[v.name] = true
+	}
+	for _, c := range po.consts {
+		s.top[c.name] = true
+	}
+	for _, c := range po.aliases {
+		s.top[c.name] = true
+	}
+	// aliases first, so that parameter names do not clash with them
+	var body strings.Builder
+	w := &body
+	for _, c := range po.aliases {
+		w.WriteString("\n")
+		pos(w, c.pos)
+		fmt.Fprintf(w, "// %s is %s in Gocpy (methods of named basic Go types are not available).\ntype %s = %s\n", c.name, c.typ, c.name, c.typ)
+	}
+	for _, c := range po.consts {
+		w.WriteString("\n")
+		pos(w, c.pos)
+		if c.typ != "" {
+			fmt.Fprintf(w, "const %s %s = %s\n", c.name, c.typ, c.value)
+		} else {
+			fmt.Fprintf(w, "const %s = %s\n", c.name, c.value)
+		}
+	}
+	for _, t := range po.types {
+		t := t
+		name := t.n.Obj().Name()
+		if t.iface {
+			w.WriteString("\n")
+			pos(w, t.pos)
+			fmt.Fprintf(w, "type %s interface {\n", name)
+			for _, mt := range t.methods {
+				fmt.Fprintf(w, "\t%s%s\n", mt.name, s.sigText(mt.sig, nil))
+			}
+			w.WriteString("\tGocpyHandle() uint64\n}\n")
+			fmt.Fprintf(w, "\n// GocpyImpl_%s holds Go values of the interface %s.\ntype GocpyImpl_%s struct {\n\tGocpyRef *gobridge.Ref\n}\n", name, name, name)
+			fmt.Fprintf(w, "\nfunc (gocpyX GocpyImpl_%s) GocpyHandle() uint64 {\n\treturn gocpyX.GocpyRef.H()\n}\n", name)
+			for _, mt := range t.methods {
+				mt := mt
+				names := s.names(mt.sig.params)
+				fmt.Fprintf(w, "\n")
+				pos(w, mt.pos)
+				fmt.Fprintf(w, "func (gocpyX GocpyImpl_%s) %s%s {\n", name, mt.name, s.sigText(mt.sig, names))
+				s.body(w, mt.id, "gocpyX", mt.sig.params, names, mt.sig.results)
+				w.WriteString("}\n")
+			}
+			continue
+		}
+		w.WriteString("\n")
+		pos(w, t.pos)
+		fmt.Fprintf(w, "type %s struct {\n\tGocpyRef *gobridge.Ref\n}\n", name)
+		fmt.Fprintf(w, "\nvar gocpyReg_%s = gobridge.Register(%q, func(r *gobridge.Ref) any { return &%s{GocpyRef: r} })\n", name, "*"+typePath(t.n), name)
+		fmt.Fprintf(w, "var gocpyRegV_%s = gobridge.Register(%q, func(r *gobridge.Ref) any { return %s{GocpyRef: r} })\n", name, typePath(t.n), name)
+		fmt.Fprintf(w, "\n// GocpyHandle returns the handle of the Go value.\nfunc (gocpyX %s) GocpyHandle() uint64 {\n\treturn gocpyX.GocpyRef.H()\n}\n", name)
+		if t.ctor >= 0 {
+			fmt.Fprintf(w, "\n// GocpyNew_%s returns a new zero Go value.\nfunc GocpyNew_%s() *%s {\n\tgocpyD := gobridge.Invoke(%d, gobridge.NewEncoder())\n\th, _ := gocpyD.Handle()\n\treturn &%s{GocpyRef: gobridge.NewRef(h)}\n}\n", name, name, name, t.ctor, name)
+		}
+		for _, mt := range t.methods {
+			names := s.names(mt.sig.params)
+			w.WriteString("\n")
+			pos(w, mt.pos)
+			fmt.Fprintf(w, "func (gocpyX %s) %s%s {\n", name, mt.name, s.sigText(mt.sig, names))
+			s.body(w, mt.id, "gocpyX", mt.sig.params, names, mt.sig.results)
+			w.WriteString("}\n")
+		}
+		for _, f := range t.fields {
+			ft := s.spell(f.t)
+			w.WriteString("\n")
+			pos(w, f.pos)
+			fmt.Fprintf(w, "func (gocpyX %s) GocpyGet_%s() %s {\n", name, f.name, ft)
+			s.body(w, f.get, "gocpyX", nil, nil, []*bt{f.t})
+			w.WriteString("}\n\n")
+			pos(w, f.pos)
+			fmt.Fprintf(w, "func (gocpyX %s) GocpySet_%s(v %s) {\n", name, f.name, ft)
+			s.body(w, f.set, "gocpyX", []param{{"v", f.t}}, []string{"v"}, nil)
+			w.WriteString("}\n")
+		}
+	}
+	for i, v := range po.vars {
+		w.WriteString("\n")
+		pos(w, v.pos)
+		fmt.Fprintf(w, "var %s %s = gocpyVar_%d()\n", v.name, s.spell(v.t), i)
+		if v.isErr {
+			fmt.Fprintf(w, "var gocpySent_%d = gobridge.Sentinel(%d, %s)\n", i, v.id, v.name)
+		}
+		fmt.Fprintf(w, "\nfunc gocpyVar_%d() %s {\n", i, s.spell(v.t))
+		s.body(w, v.id, "", nil, nil, []*bt{v.t})
+		w.WriteString("}\n")
+	}
+	for _, f := range po.funcs {
+		names := s.names(f.sig.params)
+		w.WriteString("\n")
+		pos(w, f.pos)
+		fmt.Fprintf(w, "func %s%s {\n", f.name, s.sigText(f.sig, names))
+		s.body(w, f.id, "", f.sig.params, names, f.sig.results)
+		w.WriteString("}\n")
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "// Code generated by gocpy from Go package %q; DO NOT EDIT.\npackage %s\n\nimport (\n", pi.pkg.Path(), pi.pkg.Name())
+	if strings.Contains(body.String(), "gobridge.") || strings.Contains(s.hb.String(), "gobridge.") {
+		out.WriteString("\t\"std/gobridge\"\n")
+	}
+	var paths []string
+	for p := range s.aliases {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		fmt.Fprintf(&out, "\t%s %q\n", s.aliases[p], p)
+	}
+	out.WriteString(")\n")
+	out.WriteString(body.String())
+	out.WriteString(s.hb.String())
+	return out.String()
 }

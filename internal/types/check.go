@@ -169,6 +169,7 @@ type checker struct {
 	fileScopes map[*ast.File]*Scope
 	imports    map[*ast.File]map[string]*PkgName
 	curFile    *ast.File
+	filePrefix map[string]string // file name -> ast.File.Prefix
 
 	scope *Scope // current local scope (nil at package level)
 
@@ -639,6 +640,25 @@ func (c *checker) annotInt(a *ast.Annotation) int64 {
 	return 0
 }
 
+// otherPackage reports whether the package-level object o belongs to another
+// package than the code at pos. All packages share one scope after the build
+// merged them, so a local name in a dependency may equal a top-level name of
+// the target package; that is not shadowing.
+func (c *checker) otherPackage(o Object, pos token.Pos) bool {
+	if c.pkg.Scope.Lookup(o.Name()) != o {
+		return false
+	}
+	if c.filePrefix == nil {
+		c.filePrefix = map[string]string{}
+		for _, f := range c.pkg.Files {
+			c.filePrefix[f.Package.File] = f.Prefix
+		}
+	}
+	a, ok1 := c.filePrefix[o.Pos().File]
+	b, ok2 := c.filePrefix[pos.File]
+	return ok1 && ok2 && a != b
+}
+
 // scopeOf returns the scope where lookups start for package-level code.
 func (c *checker) fileScope() *Scope { return c.fileScopes[c.curFile] }
 
@@ -650,7 +670,7 @@ func (c *checker) declare(s *Scope, id *ast.Ident, obj Object) {
 	}
 	c.checkImportConflict(id)
 	if s.Lookup(id.Name) == nil && s.Parent != nil {
-		if prev, _ := s.Parent.LookupParent(id.Name); prev != nil {
+		if prev, _ := s.Parent.LookupParent(id.Name); prev != nil && !c.otherPackage(prev, id.Pos()) {
 			if _, isPkg := prev.(*PkgName); !isPkg { // import conflicts are reported above
 				if prev.Pos().Line == 0 {
 					c.errorf(id.Pos(), "%s shadows a predeclared identifier; shadowing is not allowed", id.Name)

@@ -101,7 +101,7 @@ typedef struct gocpy_typeinfo {
     int kind;                                          /* GOCPY_K_* (0: other) */
     const struct gocpy_typeinfo *elem;                 /* pointer, slice and array element; map value */
     const struct gocpy_idesc *iface;                   /* interface types: method descriptor */
-    int nfields;                                       /* structs: fields in declaration order */
+    int nfields;                                       /* structs: fields in declaration order; funcs: see GOCPY_K_FUNC */
     const struct gocpy_field *fields;
     const struct gocpy_typeinfo *key;                  /* maps: key type */
     int64_t len;                                       /* arrays: length */
@@ -117,6 +117,7 @@ typedef struct gocpy_field {
 enum {
     GOCPY_K_OTHER = 0, GOCPY_K_BOOL, GOCPY_K_INT, GOCPY_K_UINT, GOCPY_K_FLOAT, GOCPY_K_STRING,
     GOCPY_K_PTR, GOCPY_K_SLICE, GOCPY_K_ARRAY, GOCPY_K_IFACE, GOCPY_K_STRUCT, GOCPY_K_MAP,
+    GOCPY_K_FUNC, /* fields: parameters then results; len: parameter count | variadic << 32 */
 };
 
 typedef struct gocpy_exception {

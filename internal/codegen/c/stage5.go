@@ -653,6 +653,21 @@ func (g *gen) typeinfoDefs(b *strings.Builder) {
 			key, elem = g.tiRefT(u.Key), g.tiRefT(u.Elem)
 		case *types.Array:
 			alen = fmt.Sprint(u.Len)
+		case *types.Signature:
+			// parameters then results, for the Go bridge (a Go func of the same type)
+			var fs []string
+			for _, v := range append(append([]*types.Var{}, u.Params...), u.Results...) {
+				fs = append(fs, fmt.Sprintf("{ \"\", 0, %s }", g.tiRefT(v.Type())))
+			}
+			if len(fs) > 0 {
+				fmt.Fprintf(b, "static const gocpy_field gocpy_tif_%s[] = { %s };\n", id, strings.Join(fs, ", "))
+				nf, fields = fmt.Sprint(len(fs)), "gocpy_tif_"+id
+			}
+			n := int64(len(u.Params))
+			if u.Variadic {
+				n |= 1 << 32
+			}
+			alen = fmt.Sprint(n) + "LL"
 		}
 		fmt.Fprintf(b, "const gocpy_typeinfo gocpy_ti_%s = { %s, gocpy_tifmt_%s, sizeof(%s), %v, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s };\n\n",
 			id, cString(g.typeName(t)), id, ct, ptrShaped(t), eq, len(ms), mt, kind, elem, idesc, nf, fields, key, alen)
@@ -693,6 +708,8 @@ func (g *gen) tiKind(t types.Type) (kind, elem, idesc string) {
 		kind = "GOCPY_K_STRUCT"
 	case *types.Map:
 		kind = "GOCPY_K_MAP"
+	case *types.Signature:
+		kind = "GOCPY_K_FUNC"
 	}
 	return
 }
@@ -706,8 +723,8 @@ func (g *gen) dynFmt(t types.Type, x, sb string) string {
 			if fn.PtrRecv && !ptrShaped(t) {
 				continue
 			}
-			if !fn.PtrRecv && ptrShaped(t) {
-				recv = "(*" + x + ")"
+			if !fn.PtrRecv && ptrShaped(t) && fn.RecvNamed != types.ExceptionType {
+				recv = "(*" + x + ")" // Exception methods take the exception pointer
 			}
 			return fmt.Sprintf("gocpy_sb_str(%s, %s(%s))", sb, fn.CName, recv)
 		}

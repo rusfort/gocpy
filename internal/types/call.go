@@ -127,6 +127,9 @@ func (c *checker) args(e *ast.CallExpr) []*operand {
 func (c *checker) argScore(x *operand, t Type) int {
 	if isUntyped(x.typ) {
 		if !c.canConvertUntyped(x, t) {
+			if _, ok := t.Underlying().(*Interface); ok && x.typ != Typ[UntypedNil] && assignableTo(Default(x.typ), t) {
+				return 0 // the default type, boxed (any)
+			}
 			return -1
 		}
 		if Identical(Default(x.typ), t) {

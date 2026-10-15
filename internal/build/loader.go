@@ -584,6 +584,7 @@ type fileRW struct {
 
 func (l *loader) rewriteFile(u *unit, f *ast.File) {
 	rw := &fileRW{l: l, u: u, imports: map[string]*unit{}, used: map[string]bool{}, std: map[string]bool{}}
+	f.Prefix = u.prefix
 	var keep []*ast.ImportSpec
 	aliasPos := map[string]token.Pos{}
 	aliasSpec := map[string]string{}

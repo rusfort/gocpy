@@ -335,6 +335,7 @@ type method struct {
 	id   int
 	sig  *sigInfo
 	pos  string
+	ptr  bool // pointer receiver in Go (needs an addressable Gocpy value)
 }
 
 type field struct {
@@ -431,11 +432,12 @@ func (g *gen) typeOut(n *types.Named, po *pkgOut) *typeOut {
 				po.unsup[tn+"."+f.Name()] = why
 				continue
 			}
-			to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("%s.%s", qn, f.Name())), si, posOf(f.Pos())})
+			to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("%s.%s", qn, f.Name())), si, posOf(f.Pos()), false})
 		}
 		return to
 	}
 	ms := types.NewMethodSet(types.NewPointer(n))
+	vms := types.NewMethodSet(n)
 	names := map[string]bool{}
 	for i := 0; i < ms.Len(); i++ {
 		f := ms.At(i).Obj().(*types.Func)
@@ -451,7 +453,8 @@ func (g *gen) typeOut(n *types.Named, po *pkgOut) *typeOut {
 			po.unsup[tn+"."+f.Name()] = why
 			continue
 		}
-		to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("(*%s).%s", qn, f.Name())), si, posOf(f.Pos())})
+		ptr := vms.Lookup(f.Pkg(), f.Name()) == nil
+		to.methods = append(to.methods, method{f.Name(), g.add(fmt.Sprintf("(*%s).%s", qn, f.Name())), si, posOf(f.Pos()), ptr})
 	}
 	switch n.Underlying().(type) {
 	case *types.Struct:
@@ -935,7 +938,7 @@ func (s *stub) helper(b *bt) string {
 		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, _ := d.Handle()\n\treturn %s{GocpyRef: gobridge.NewRef(h)}\n}\n", h, t, t)
 	case "ptr":
 		q := s.qual(b.named)
-		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\tif v == nil {\n\t\te.Handle(0)\n\t\treturn\n\t}\n\te.Handle(v.GocpyRef.H())\n}\n", h, t)
+		fmt.Fprintf(w, "\nfunc gocpyEnc%s(e *gobridge.Encoder, v %s) {\n\tif v == nil {\n\t\te.Handle(0)\n\t\treturn\n\t}\n\te.Handle(v.GocpyInit())\n}\n", h, t)
 		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, _ := d.Handle()\n\tif h == 0 {\n\t\treturn nil\n\t}\n\treturn &%s{GocpyRef: gobridge.NewRef(h)}\n}\n", h, t, q)
 	case "iface":
 		fmt.Fprintf(w, "\nfunc gocpyDec%s(d *gobridge.Decoder) %s {\n\th, name := d.Handle()\n\tif h == 0 {\n\t\treturn nil\n\t}\n\tr := gobridge.NewRef(h)\n\tv := gobridge.Make(r, name)\n\tif x, ok := v.(%s); ok {\n\t\treturn x\n\t}\n\treturn %s{GocpyRef: r}\n}\n", h, t, t, s.implName(b.named))
@@ -1123,11 +1126,34 @@ func stubSource(m *model, pi *pkgInfo, po *pkgOut) string {
 		if t.ctor >= 0 {
 			fmt.Fprintf(w, "\n// GocpyNew_%s returns a new zero Go value.\nfunc GocpyNew_%s() *%s {\n\tgocpyD := gobridge.Invoke(%d, gobridge.NewEncoder())\n\th, _ := gocpyD.Handle()\n\treturn &%s{GocpyRef: gobridge.NewRef(h)}\n}\n", name, name, name, t.ctor, name)
 		}
+		// A zero Gocpy value (var x T) has no Go value yet. Methods with a
+		// pointer receiver in Go (and field setters) create it and keep it in
+		// x; value methods and getters work on a fresh zero Go value.
+		lazy, zero := "", ""
+		if t.ctor >= 0 {
+			lazy = fmt.Sprintf("\tif gocpyX.GocpyRef == nil {\n\t\tgocpyX.GocpyRef = GocpyNew_%s().GocpyRef\n\t}\n", name)
+			zero = fmt.Sprintf("\tif gocpyX.GocpyRef == nil {\n\t\tgocpyX = *GocpyNew_%s()\n\t}\n", name)
+		}
+		// GocpyInit: the handle of *x, creating the Go value of a zero x
+		fmt.Fprintf(w, "\n// GocpyInit returns the handle of the Go value, creating it for a zero value.\nfunc (gocpyX *%s) GocpyInit() uint64 {\n%s\treturn gocpyX.GocpyRef.H()\n}\n", name, lazy)
+		recv := func(ptr bool) string {
+			if ptr && t.ctor >= 0 {
+				return "*" + name
+			}
+			return name
+		}
+		init := func(ptr bool) string {
+			if ptr {
+				return lazy
+			}
+			return zero
+		}
 		for _, mt := range t.methods {
 			names := s.names(mt.sig.params)
 			w.WriteString("\n")
 			pos(w, mt.pos)
-			fmt.Fprintf(w, "func (gocpyX %s) %s%s {\n", name, mt.name, s.sigText(mt.sig, names))
+			fmt.Fprintf(w, "func (gocpyX %s) %s%s {\n", recv(mt.ptr), mt.name, s.sigText(mt.sig, names))
+			w.WriteString(init(mt.ptr))
 			s.body(w, mt.id, "gocpyX", mt.sig.params, names, mt.sig.results)
 			w.WriteString("}\n")
 		}
@@ -1136,10 +1162,12 @@ func stubSource(m *model, pi *pkgInfo, po *pkgOut) string {
 			w.WriteString("\n")
 			pos(w, f.pos)
 			fmt.Fprintf(w, "func (gocpyX %s) GocpyGet_%s() %s {\n", name, f.name, ft)
+			w.WriteString(zero)
 			s.body(w, f.get, "gocpyX", nil, nil, []*bt{f.t})
 			w.WriteString("}\n\n")
 			pos(w, f.pos)
-			fmt.Fprintf(w, "func (gocpyX %s) GocpySet_%s(v %s) {\n", name, f.name, ft)
+			fmt.Fprintf(w, "func (gocpyX %s) GocpySet_%s(v %s) {\n", recv(true), f.name, ft)
+			w.WriteString(lazy)
 			s.body(w, f.set, "gocpyX", []param{{"v", f.t}}, []string{"v"}, nil)
 			w.WriteString("}\n")
 		}

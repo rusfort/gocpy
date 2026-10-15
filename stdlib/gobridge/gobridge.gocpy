@@ -70,11 +70,19 @@ type Handle interface {
 	GocpyHandle() uint64
 }
 
+// initHandle is implemented by pointers to Gocpy types that wrap Go values.
+type initHandle interface {
+	GocpyInit() uint64
+}
+
 // HandleOf returns the handle of a wrapped Go value (0 for nil). Gocpy
 // values cannot be passed where a Go interface is expected.
 func HandleOf(v any) uint64 {
 	if v == nil {
 		return 0
+	}
+	if h, ok := v.(initHandle); ok {
+		return h.GocpyInit() // *T: creates the Go value of a zero T
 	}
 	if h, ok := v.(Handle); ok {
 		return h.GocpyHandle()

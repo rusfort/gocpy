@@ -60,6 +60,9 @@ type File struct {
 	Decls   []Decl
 	// Directives: line -> `//gocpy:` comments on that line (e.g. "ignore:unused").
 	Directives map[int][]string
+	// Prefix of the package-level names of this file's package after the
+	// build merged all packages ("" for the target package).
+	Prefix string
 }
 
 func (f *File) Pos() token.Pos { return f.Package }

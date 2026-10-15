@@ -39,7 +39,7 @@ var genSource string
 var runtimeSource string
 
 // genVersion changes whenever generated code changes (cache key).
-const genVersion = "gocpy-gobridge-7"
+const genVersion = "gocpy-gobridge-9"
 
 // Request describes the Go side of a program.
 type Request struct {

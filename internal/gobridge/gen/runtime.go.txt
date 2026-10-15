@@ -671,6 +671,16 @@ func readDesc(d *decoder) *gdesc {
 	case 'p':
 		g.elem = readDesc(d)
 		g.typ = reflect.PointerTo(g.elem.goType())
+	case 'F':
+		var in, out []reflect.Type
+		for i, n := 0, d.length(); i < n; i++ {
+			in = append(in, readDesc(d).goType())
+		}
+		for i, n := 0, d.length(); i < n; i++ {
+			out = append(out, readDesc(d).goType())
+		}
+		variadic := d.byte1() != 0 && len(in) > 0 && in[len(in)-1].Kind() == reflect.Slice
+		g.typ = reflect.FuncOf(in, out, variadic)
 	case 'r':
 		n := d.length()
 		var fs []reflect.StructField
@@ -758,6 +768,12 @@ func (g *gdesc) value(d *decoder) reflect.Value {
 			p := reflect.New(g.elem.goType())
 			setValue(p.Elem(), g.elem.value(d))
 			r.Set(p)
+		}
+	case 'F':
+		if d.byte1() != 0 {
+			r.Set(reflect.MakeFunc(g.typ, func([]reflect.Value) []reflect.Value {
+				panic("a Gocpy func value cannot be called from Go")
+			}))
 		}
 	case 'r':
 		j := 0

@@ -1791,7 +1791,7 @@ static int gobr_int_kind(const gocpy_typeinfo *t, bool sign) {
 
 _Noreturn static void gobr_unsupported(const gocpy_typeinfo *t) {
     static char buf[512];
-    snprintf(buf, sizeof buf, "a Gocpy value of type %s cannot be passed to Go (funcs and channels are not supported)", t ? t->name : "?");
+    snprintf(buf, sizeof buf, "a Gocpy value of type %s cannot be passed to Go (channels are not supported)", t ? t->name : "?");
     gocpy_panic(buf);
 }
 
@@ -1836,6 +1836,17 @@ static void gobr_desc(gobr_buf *b, const gocpy_typeinfo *t, gobr_stack *st) {
     case GOCPY_K_MAP: gb_byte(b, 'm'); gobr_child_desc(b, t->key, st); gobr_child_desc(b, t->elem, st); return;
     case GOCPY_K_PTR: gb_byte(b, 'p'); gobr_child_desc(b, t->elem, st); return;
     case GOCPY_K_IFACE: gb_byte(b, 'e'); return;
+    case GOCPY_K_FUNC: {
+        /* a Go func value of the same type; Go cannot call it */
+        int64_t nin = t->len & 0xffffffff;
+        gb_byte(b, 'F');
+        gb_u64(b, (uint64_t)nin);
+        for (int64_t i = 0; i < nin; i++) gobr_child_desc(b, t->fields[i].type, st);
+        gb_u64(b, (uint64_t)(t->nfields - nin));
+        for (int64_t i = nin; i < t->nfields; i++) gobr_child_desc(b, t->fields[i].type, st);
+        gb_byte(b, (uint8_t)((t->len >> 32) & 1));
+        return;
+    }
     case GOCPY_K_STRUCT:
         gobr_push(st, t);
         gb_byte(b, 'r');
@@ -1941,6 +1952,7 @@ static void gobr_value(gobr_buf *b, const gocpy_typeinfo *t, const void *p, gobr
         return;
     }
     case GOCPY_K_IFACE: gobr_any(b, *(const gocpy_iface *)p, depth + 1); return;
+    case GOCPY_K_FUNC: gb_byte(b, ((const gocpy_func *)p)->fn != NULL ? 1 : 0); return;
     case GOCPY_K_STRUCT:
         gobr_push(st, t);
         for (int i = 0; i < t->nfields; i++) gobr_child(b, t->fields[i].type, (const uint8_t *)p + t->fields[i].offset, st, depth);

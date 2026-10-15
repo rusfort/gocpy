@@ -107,6 +107,16 @@ func Max(a, b float64) float64 { return a }
 	fails(t, src+`func main() { _ = Max(1, 2.0) }`, "ambiguous call")
 	fails(t, src+`func main() { _ = Max("a", "b") }`, "no overload of Max matches")
 	fails(t, src+`func main() { var x int = 1; var y float64 = 2; _ = Max(x, y) }`, "no overload")
+	anySrc := `@overload
+func Name(v any) string { return "any" }
+@overload
+func Name(f func() any) string { return "func" }
+@overload
+func Str(v any) string { return "any" }
+@overload
+func Str(v string) string { return "string" }
+`
+	ok(t, anySrc+`func main() { _ = Name(3); _ = Name("s"); _ = Name(2.5); _ = Str("x"); _ = Str(1) }`)
 }
 
 func TestNotYetSupported(t *testing.T) {

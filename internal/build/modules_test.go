@@ -354,8 +354,17 @@ import (
     "net/url"
     "os"
     "strings"
+    "sync/atomic"
     "time"
 )
+
+type Counters struct {
+    n atomic.Int64
+    b strings.Builder
+}
+
+// a top-level name that std/gobridge uses for locals
+func name() string { return "name" }
 
 type Person struct {
     Name string
@@ -417,6 +426,19 @@ func main() {
     c := http.Cookie{Name: "n", Value: "v", MaxAge: 3}
     c.MaxAge++
     fmt.Println(c.String())
+
+    var cs Counters
+    cs.n.Add(2)
+    cs.n.Add(3)
+    cs.b.WriteString("zero")
+    var z url.URL
+    fmt.Println(cs.n.Load(), cs.b.String(), z.String() == "", z.Path == "")
+    z.Host = "h"
+    z.Scheme = "http"
+    var jb bytes.Buffer
+    _ = json.NewEncoder(&jb).Encode([]int{1, 2})
+    fmt.Println(z.String(), strings.TrimSpace(jb.String()), name())
+    fmt.Println(gofmt.Sprintf("%T|%T|%T", func() {}, func(x int, ys ...string) (string, error) { return "", nil }, 3))
 }
 `,
 	})
@@ -435,6 +457,9 @@ true
 1500000000 2023-11-14T22:13:20Z 0
 404 text/plain; charset=utf-8 404 page not found
 n=v; Max-Age=4
+5 zero true true
+http://h [1,2] name
+func()|func(int, ...string) (string, interface {})|int
 `
 	if out != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out, want)

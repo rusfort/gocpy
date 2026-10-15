@@ -82,7 +82,7 @@ func (c *checker) unsafeBlock(s *ast.UnsafeStmt) {
 func (c *checker) checkUnsafeBuiltinName(e *ast.Ident) bool {
 	for s := c.scope; s != nil; s = s.Parent {
 		if s.Kind == "unsafe" {
-			if prev, _ := s.Parent.LookupParent(e.Name); prev != nil && prev.Pos().Line != 0 {
+			if prev, _ := s.Parent.LookupParent(e.Name); prev != nil && prev.Pos().Line != 0 && !c.otherPackage(prev, e.Pos()) {
 				c.errorf(e.Pos(), "%s inside unsafe is the builtin, but %s is also declared at %s; rename it", e.Name, e.Name, prev.Pos())
 				return false
 			}
